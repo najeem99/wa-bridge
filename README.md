@@ -321,7 +321,7 @@ wa-bridge/
 ### Running the tests
 
 ```bash
-npm install      # also installs server/ dependencies
+npm install      # dev tools for the tests; also runs `npm install` inside server/
 npm test         # ~100 checks across server, page and background
 ```
 

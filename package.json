@@ -5,7 +5,7 @@
   "description": "Privacy tools for WhatsApp Web plus a text-only, allowlisted bridge to Claude Desktop (MCP).",
   "type": "module",
   "scripts": {
-    "postinstall": "npm --prefix server install",
+    "postinstall": "node scripts/install-server.cjs",
     "test": "node tests/server.test.mjs && node tests/page.test.mjs && node tests/background.test.mjs",
     "test:server": "node tests/server.test.mjs",
     "test:page": "node tests/page.test.mjs",
