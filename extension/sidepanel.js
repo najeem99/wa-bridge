@@ -8,7 +8,7 @@ const STATUS_TEXT = {
 };
 
 async function render() {
-  const s = await chrome.storage.local.get(["status", "token", "logDetails", "blur", "notifyMode", "allowlist", "allowAll", "allowSend", "sendMode", "log"]);
+  const s = await chrome.storage.local.get(["status", "token", "logDetails", "allowVoice", "sttModel", "blur", "notifyMode", "allowlist", "allowAll", "allowSend", "sendMode", "log"]);
   $("allowSend").checked = s.allowSend !== false;
   $("sendMode").value = s.sendMode === "confirm" ? "confirm" : "countdown";
   $("sendMode").disabled = s.allowSend === false;
@@ -19,6 +19,9 @@ async function render() {
   $("statusText").title = s.status?.detail || "";
   $("statusDetail").textContent = s.status?.detail || "";
   $("logDetails").checked = s.logDetails !== false;
+  $("allowVoice").checked = s.allowVoice !== false;
+  $("sttModel").value = s.sttModel === "base" ? "base" : "small";
+  $("sttModel").disabled = s.allowVoice === false;
   $("pairing").hidden = st === "connected" && !!s.token;
 
   $("blur").checked = !!s.blur;
@@ -114,6 +117,7 @@ function sharedDetails(e) {
     if (d.text && e.tool === "send_message") msgs.push({ from: "Sent by Claude", text: d.text });
     parts.push(section(`Messages shared (${msgs.length})`, msgs.map(msgItem)));
 
+    if (typeof d.transcript === "string") parts.push(section("Voice note transcript (text only)", [msgItem({ from: d.from, time: d.time, text: d.transcript })]));
     if (d.user_note) parts.push(section("Your auto-reply note", [mk("li", "msg", d.user_note)]));
     if (d.other_chats_with_activity) parts.push(section("Hidden", [mk("li", null, `${d.other_chats_with_activity} other chats had activity (not named)`)]));
   }
@@ -132,6 +136,8 @@ function sharedDetails(e) {
   return wrap;
 }
 
+$("allowVoice").onchange = (e) => chrome.storage.local.set({ allowVoice: e.target.checked });
+$("sttModel").onchange = (e) => chrome.storage.local.set({ sttModel: e.target.value });
 $("logDetails").onchange = (e) => chrome.storage.local.set({ logDetails: e.target.checked });
 $("refreshBtn").onclick = async () => {
   const b = $("refreshBtn");

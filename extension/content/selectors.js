@@ -32,6 +32,11 @@ window.WA_SELECTORS = {
   replyLabels: ["Reply", "رد", "الرد", "Responder", "Répondre", "Antworten", "Rispondi", "जवाब दें", "Balas", "Yanıtla"],
   // The quote preview WhatsApp shows above the message box, and its close button.
   quoteCloseButton: ['[aria-label="Cancel reply"]', '[aria-label*="cancel" i]', '[data-icon="x"]', '[data-icon*="close"]'],
+  // Voice notes: the play button inside a voice message.
+  voicePlayButton: [
+    '[data-icon="audio-play"]', '[data-icon="ptt-play"]', '[data-icon*="audio-play"]', '[data-icon*="ptt"]',
+    'button[aria-label*="voice message" i]', '[role="button"][aria-label*="Play" i]', 'button[aria-label*="Play" i]',
+  ],
   sendButton: [
     '#main footer button[aria-label="Send"]',
     '#main footer [data-icon="send"]',

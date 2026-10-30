@@ -1,26 +1,64 @@
 {
   "manifest_version": 3,
   "name": "WA Bridge",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Privacy tools for WhatsApp Web, plus a text-only, allowlisted bridge to Claude Desktop.",
   "minimum_chrome_version": "116",
-  "permissions": ["storage", "notifications", "sidePanel", "tabs", "alarms", "scripting"],
-  "icons": { "128": "icon.png" },
-  "host_permissions": ["https://web.whatsapp.com/*"],
-  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": [
+    "storage",
+    "notifications",
+    "sidePanel",
+    "tabs",
+    "alarms",
+    "scripting"
+  ],
+  "icons": {
+    "128": "icon.png"
+  },
+  "host_permissions": [
+    "https://web.whatsapp.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "content_scripts": [
     {
-      "matches": ["https://web.whatsapp.com/*"],
-      "js": ["content/selectors.js", "content/reader.js", "content/main.js"],
-      "css": ["content/privacy.css"],
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "content/page-hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "content/selectors.js",
+        "content/reader.js",
+        "content/main.js"
+      ],
+      "css": [
+        "content/privacy.css"
+      ],
       "run_at": "document_idle"
     }
   ],
-  "side_panel": { "default_path": "sidepanel.html" },
-  "action": { "default_title": "WA Bridge" },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "WA Bridge"
+  },
   "commands": {
     "panic-blur": {
-      "suggested_key": { "default": "Alt+X" },
+      "suggested_key": {
+        "default": "Alt+X"
+      },
       "description": "Toggle privacy blur on WhatsApp Web"
     }
   }

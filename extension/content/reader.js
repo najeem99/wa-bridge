@@ -245,11 +245,63 @@
       const out = isOutgoing(node);
       const metaEl = node.matches?.("[data-pre-plain-text]") ? node : waQ("messageMeta", node);
       const meta = parseMeta(metaEl && metaEl.getAttribute("data-pre-plain-text"));
-      const text = messageText(node, metaEl) || "[media or non-text message]";
+      const voice = !!voicePlayButton(node);
+      const duration = voice ? voiceDuration(node) : null;
+      const text = messageText(node, metaEl) || (voice ? `[voice message${duration ? " " + duration : ""}]` : "[media or non-text message]");
       const rawId = node.getAttribute("data-id") || node.querySelector("[data-id]")?.getAttribute("data-id") || "";
       const id = MSG_ID_RE.test(rawId) ? rawId : `${meta.date}|${meta.time}|${out ? "out" : "in"}|${text.slice(0, 80)}`;
-      return { id, ref: refFor(id), from: out ? "me" : meta.sender || "them", direction: out ? "out" : "in", time: meta.time, date: meta.date, text, node };
+      return { id, ref: refFor(id), from: out ? "me" : meta.sender || "them", direction: out ? "out" : "in", time: meta.time, date: meta.date, text, ...(voice ? { voice: true, duration } : {}), node };
     });
+  }
+
+  function voicePlayButton(node) {
+    for (const sel of window.WA_SELECTORS.voicePlayButton) {
+      let el = null;
+      try { el = node.querySelector(sel); } catch {}
+      if (el) return el.closest('button, [role="button"]') || el;
+    }
+    return null;
+  }
+  function voiceDuration(node) {
+    for (const el of node.querySelectorAll("div, span")) {
+      if (el.children.length === 0 && /^\d{1,2}:\d{2}$/.test(norm(el.textContent))) return norm(el.textContent);
+    }
+    return null;
+  }
+
+  // Gets a voice note's decrypted audio. WhatsApp only decrypts it on play, so
+  // press play with the page hook muting and stopping it, and catch the blob URL.
+  async function grabVoiceAudio(msg) {
+    const node = msg.node;
+    node.scrollIntoView?.({ block: "center" });
+    highlight(node);
+    const existing = node.querySelector('audio[src^="blob:"]');
+    let url = existing?.src || null, type = "";
+    if (!url) {
+      const btn = voicePlayButton(node);
+      if (!btn) throw new Error("That message doesn't look like a voice note.");
+      const got = new Promise((resolve) => {
+        const on = (e) => { document.removeEventListener("wa-bridge-audio", on); resolve(e.detail); };
+        document.addEventListener("wa-bridge-audio", on);
+        setTimeout(() => { document.removeEventListener("wa-bridge-audio", on); resolve(null); }, 15000);
+      });
+      document.documentElement.setAttribute("data-wa-bridge-grab", "1");
+      try {
+        clickLikeAUser(btn);
+        const detail = await got;
+        if (!detail) throw new Error("WhatsApp didn't load the voice note within 15 seconds. Try playing it once yourself, then ask again.");
+        url = detail.url; type = detail.type;
+      } finally {
+        document.documentElement.removeAttribute("data-wa-bridge-grab");
+      }
+    }
+    const res = await fetch(url);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (!buf.length) throw new Error("The voice note came back empty.");
+    if (buf.length > 15 * 1024 * 1024) throw new Error("Voice note is too large to transcribe (over 15 MB).");
+    let bin = "";
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    return { audio_base64: btoa(bin), bytes: buf.length, type: type || res.headers?.get?.("content-type") || "" };
   }
 
   // A short, stable handle for a message that Claude can pass back (reply_to).
@@ -427,6 +479,6 @@
 
   window.WAReader = {
     readChatList, findRow, currentChatName, findSearchBox, isChatOpen, headerNames, openChat, readMessages, searchFor, clearSearch,
-    typeInto, highlight, parseMeta, norm, pressSend, findMessage, attachReply, cancelReply, quotePreviewText, waitForMessages, inspectLayout,
+    typeInto, highlight, parseMeta, norm, pressSend, grabVoiceAudio, findMessage, attachReply, cancelReply, quotePreviewText, waitForMessages, inspectLayout,
   };
 })();

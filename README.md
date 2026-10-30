@@ -71,6 +71,7 @@ WA Bridge takes a different approach:
 **Privacy tools (no AI needed)**
 - 🌫️ **Blur mode**: names, photos and messages blurred until you hover (`Alt+X`)
 - 🔕 **Private notifications**: "New WhatsApp message" with no name or preview
+- 🎙️ **Voice notes as text**: voice messages are transcribed **on your own computer** (Whisper, auto-detects Arabic, Malayalam, English and more); Claude gets only the text
 - 💬 **Quoted replies**: Claude can reply under a specific message, like WhatsApp's own Reply
 - 📜 **Activity log** of everything Claude did; expand any entry to see exactly which contacts and messages Claude received
 - 🔄 **Connection check**: a refresh button that really tests the link (the dot blinks green/red while connecting)
@@ -102,6 +103,7 @@ flowchart LR
 | `find_contact` | Search by name with WhatsApp's search box. Names only. | No |
 | `draft_reply` | Type a draft into an allowed chat. `replace_draft` clears an existing draft; `reply_to` quotes a message. | Yes |
 | `send_message` | Type and send to an allowed chat, after the countdown or your confirmation. `reply_to` sends it as a quoted reply. | Yes |
+| `transcribe_voice` | Text of a voice note (latest, or by `ref`). Transcribed locally; **audio never leaves your PC**. | Yes (opens it) |
 | `get_pending_replies` | Auto-reply queue: new messages in auto-reply chats, plus your note. | No |
 | `suggest_reply` | Show a proposed reply as an approval card. **Never sends by itself.** | No |
 | `inspect_layout` | Page structure diagnostic. **No text, names or times.** | No |
@@ -181,6 +183,20 @@ Ask *"reply to Ahmed's message about the report: on it, will send by 10"*. Claud
 - `reply_to` takes that ref, or a few exact words from the message (the latest match wins).
 - The extension uses WhatsApp's own Reply action (right-click menu, or the message's menu button) and checks the quote appeared before typing anything. The countdown card shows *"Replying to …"*, and Cancel removes both the text and the quote.
 
+### Voice notes
+
+Ask *"what did Sam say in his voice note?"*. `get_messages` shows voice notes as `[voice message 0:12]` with `voice: true`, and Claude calls `transcribe_voice`.
+
+```text
+WhatsApp tab ──(audio, on your PC)──► WA Bridge server ──► Whisper (local) ──► text ──► Claude
+```
+
+- The extension presses play **muted** (you won't hear it), captures the decrypted audio, and stops it. WhatsApp only decrypts a voice note when it's played.
+- The server transcribes it with **Whisper** running locally (transformers.js). The language is **detected automatically**; Claude can force one (`language: "ml"`) if needed.
+- Only the transcript goes to Claude. The side panel log shows the exact text it received.
+- Side panel → **Voice notes**: switch it off, or choose **Accurate** (default, ~240 MB, best for Arabic/Malayalam/Hindi) or **Fast** (~75 MB). The model downloads **once**, on first use, into `~/.wa-bridge/models`, so the first transcription takes a minute.
+- `npm run test:voice` checks real transcription on two short synthetic clips (English and Arabic).
+
 ### Drafts
 
 If a chat already has unsent text in its box, Claude won't overwrite it. It tells you what's there and asks whether to replace it (`replace_draft`).
@@ -235,6 +251,7 @@ sequenceDiagram
 - ⌨️ Typing uses `insertText` / `insertLineBreak`; an Enter key is never simulated while drafting, so nothing is sent by accident.
 - 🧾 The activity log shows **what Claude asked for and exactly what it received** (contacts and messages), so you can audit every call. It's stored **only in this browser**; switch off **Record what was shared** to keep just one-line summaries, or **Clear** it any time.
 - ☎️ WhatsApp message IDs (which contain phone numbers) **never leave the tab**.
+- 🎙️ Voice-note audio is transcribed **locally** and never sent anywhere; only the text reaches Claude.
 - 🩺 `inspect_layout` returns structure only; a test asserts it contains no text, names or times.
 
 **Reset pairing:** delete `~/.wa-bridge/token`, restart Claude Desktop, and paste the new token into the side panel.
@@ -249,6 +266,8 @@ sequenceDiagram
 | Chats Claude can read | none | Allowlist for reading, drafting and sending |
 | Allow all chats | Off | Makes every chat readable. Use for testing only. |
 | Claude can send messages | On | Master switch for `send_message` |
+| Claude can ask for voice notes as text | On | Allows `transcribe_voice` |
+| Transcription | Accurate | Accurate (Whisper small) or Fast (Whisper base) |
 | Record what was shared | On | Keep the full details of each call in the log (this browser only) |
 | Before sending | 5-second countdown | Or "Ask me every time" |
 | Suggest replies to new messages | Off | Auto-reply queue |
@@ -279,12 +298,14 @@ After changing server files: **restart Claude Desktop**.
 ```text
 wa-bridge/
 ├── server/
-│   └── index.js            # MCP server (stdio) + localhost WebSocket bridge, 9 tools
+│   ├── index.js            # MCP server (stdio) + localhost WebSocket bridge, 10 tools
+│   └── transcribe.js       # local Whisper speech-to-text for voice notes
 ├── extension/
 │   ├── manifest.json       # Chrome MV3
 │   ├── background.js       # bridge client, routing, notifications, auto-reply queue
 │   ├── sidepanel.html/.js  # settings, allowlists, approvals, activity log
 │   └── content/
+│       ├── page-hook.js    # runs in WhatsApp's page: catches the decrypted voice-note audio, mutes it
 │       ├── selectors.js    # ALL WhatsApp DOM selectors (the only file to fix when WhatsApp changes)
 │       ├── reader.js       # reads the page into JSON; opens chats; types; presses Send
 │       ├── main.js         # tools, allowlists, countdown/confirm UI, suggestion cards, watchers
@@ -292,7 +313,9 @@ wa-bridge/
 └── tests/
     ├── server.test.mjs     # real MCP client ⇄ server ⇄ stand-in extension; origin/token checks
     ├── page.test.mjs       # content scripts on a mock WhatsApp page (old + new layouts)
-    └── background.test.mjs # background with fake chrome.* APIs; auto-reply flow end to end
+    ├── background.test.mjs # background with fake chrome.* APIs; auto-reply flow end to end
+    ├── voice.test.mjs      # real Whisper transcription of fixtures/ (npm run test:voice)
+    └── fixtures/           # two short synthetic voice clips (English, Arabic)
 ```
 
 ### Running the tests

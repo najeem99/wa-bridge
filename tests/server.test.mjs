@@ -10,14 +10,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const home = mkdtempSync(join(tmpdir(), "wa-bridge-test-"));
-const env = { ...process.env, WA_BRIDGE_HOME: home, WA_BRIDGE_PORT: "8799" };
+const env = { ...process.env, WA_BRIDGE_HOME: home, WA_BRIDGE_PORT: "8799", WA_BRIDGE_FAKE_STT: "1" };
 const assert = (c, m) => { if (!c) { console.error("FAIL:", m); process.exit(1); } console.log("pass:", m); };
 
 const client = new Client({ name: "test", version: "1" });
 await client.connect(new StdioClientTransport({ command: "node", args: [SERVER], env, stderr: "ignore" }));
 
 const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-assert(JSON.stringify(tools) === JSON.stringify(["draft_reply", "find_contact", "get_messages", "get_new_messages", "get_pending_replies", "inspect_layout", "list_chats", "send_message", "suggest_reply"]), "9 tools listed: " + tools);
+assert(JSON.stringify(tools) === JSON.stringify(["draft_reply", "find_contact", "get_messages", "get_new_messages", "get_pending_replies", "inspect_layout", "list_chats", "send_message", "suggest_reply", "transcribe_voice"]), "10 tools listed: " + tools);
 
 let r = await client.callTool({ name: "list_chats", arguments: {} });
 assert(r.isError && /not connected/.test(r.content[0].text), "clear error when extension is absent");
@@ -74,6 +74,24 @@ ext.on("message", (raw) => {
 });
 r = await client.callTool({ name: "send_message", arguments: { chat: "Family", text: "hi" } }, undefined, { timeout: 60000 });
 assert(!r.isError && JSON.parse(r.content[0].text).status === "sent" && Date.now() - slowStart >= 25000, "send_message waits for the user beyond the normal timeout");
+
+// transcribe_voice: audio goes extension → server only; Claude gets text; the extension is told what Claude got.
+const fixture = readFileSync(new URL("./fixtures/voice-en.ogg", import.meta.url));
+const extLogs = [];
+ext.removeAllListeners("message");
+ext.on("message", (raw) => {
+  const m = JSON.parse(raw);
+  if (m.type === "log") extLogs.push(m.entry);
+  if (m.type === "req" && m.tool === "get_voice_audio") {
+    ext.send(JSON.stringify({ type: "res", id: m.id, ok: true, data: { chat: m.args.chat, ref: "mabc12", from: "Sam", time: "07:00", duration: "0:06", stt_model: "base", audio_base64: fixture.toString("base64"), bytes: fixture.length } }));
+  }
+});
+r = await client.callTool({ name: "transcribe_voice", arguments: { chat: "Family" } });
+const tr = JSON.parse(r.content[0].text);
+assert(!r.isError && tr.transcript === `[fake transcript of ${fixture.length} bytes]` && tr.from === "Sam" && tr.ref === "mabc12", "transcribe_voice returns the transcript");
+assert(!r.content[0].text.includes("audio_base64") && !r.content[0].text.includes(fixture.toString("base64").slice(0, 40)), "no audio is sent to Claude, only text");
+await new Promise((ok) => setTimeout(ok, 100));
+assert(extLogs.some((e) => e.tool === "transcribe_voice" && e.shared?.transcript === tr.transcript), "side panel log is told exactly what transcript Claude got");
 
 ext.close();
 await client.close();

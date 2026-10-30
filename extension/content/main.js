@@ -17,10 +17,11 @@
 
   // ---------- settings ----------
   const loadSettings = async () => {
-    const s = await chrome.storage.local.get(["allowlist", "allowAll", "blur", "allowSend", "sendMode", "sendDelaySec", "autoReply", "autoReplyChats"]);
+    const s = await chrome.storage.local.get(["allowlist", "allowAll", "blur", "allowSend", "sendMode", "sendDelaySec", "autoReply", "autoReplyChats", "sttModel", "allowVoice"]);
     settings = {
       allowlist: s.allowlist || [], allowAll: !!s.allowAll, blur: !!s.blur, allowSend: s.allowSend !== false,
       autoReply: !!s.autoReply, autoReplyChats: s.autoReplyChats || [],
+      sttModel: s.sttModel === "base" ? "base" : "small", allowVoice: s.allowVoice !== false,
       // "countdown": sends by itself after a few seconds unless cancelled. "confirm": waits for a Send click.
       sendMode: s.sendMode === "confirm" ? "confirm" : "countdown",
       sendDelaySec: Number(s.sendDelaySec) > 0 ? Number(s.sendDelaySec) : 5,
@@ -241,6 +242,28 @@
       return messages.length
         ? { chat, messages }
         : { chat, messages, note: "No messages found on screen. If this chat does have messages, WhatsApp's layout may have changed; run inspect_layout." };
+    },
+
+    // Used by the local server's transcribe_voice tool. The audio goes to the
+    // WA Bridge server on this computer only; Claude gets just the transcript.
+    async get_voice_audio({ chat, message }) {
+      if (!settings.allowVoice) throw new Error("Voice-note transcription is turned off in the WA Bridge side panel.");
+      if (!isAllowed(chat)) refuse(chat);
+      showActivity(`transcribing a voice note in "${chat}" (on this computer)`);
+      await R.openChat(chat);
+      await R.waitForMessages();
+      let target;
+      if (message) {
+        target = R.findMessage(message);
+        if (!target) throw new Error(`No message matching "${message}" in "${chat}".`);
+        if (!target.voice) throw new Error("That message isn't a voice note.");
+      } else {
+        const voices = R.readMessages(300).filter((m) => m.voice);
+        target = voices[voices.length - 1];
+        if (!target) throw new Error(`No voice notes found on screen in "${chat}". Scroll up in WhatsApp if it's older.`);
+      }
+      const audio = await R.grabVoiceAudio(target);
+      return { chat, ref: target.ref, from: target.from, time: target.time, date: target.date, duration: target.duration, stt_model: settings.sttModel, ...audio };
     },
 
     async inspect_layout() {

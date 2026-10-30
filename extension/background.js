@@ -26,6 +26,11 @@ async function logActivity(entry) {
 const DETAIL_CAP = 20000;
 function capped(value) {
   if (value === undefined) return undefined;
+  if (value && typeof value === "object" && typeof value.audio_base64 === "string") {
+    // Raw audio never goes in the log (and never to Claude); just note it.
+    const { audio_base64, ...rest } = value;
+    value = { ...rest, audio: `${Math.round((rest.bytes || 0) / 1024)} KB, sent only to the transcriber on this computer` };
+  }
   const json = JSON.stringify(value);
   return json.length <= DETAIL_CAP ? value : { truncated: true, preview: json.slice(0, DETAIL_CAP) };
 }
@@ -60,6 +65,14 @@ async function connect() {
       return;
     }
     if (msg.type === "pong") { pongWaiters.splice(0).forEach((f) => f(true)); return; }
+    // The server reports work it did on its own (e.g. the transcript it gave Claude).
+    if (msg.type === "log" && msg.entry && typeof msg.entry === "object") {
+      const { tool, result, error, request, shared } = msg.entry;
+      const { logDetails = true } = await chrome.storage.local.get("logDetails");
+      await logActivity({ phase: error ? "error" : "done", tool: String(tool || "server"), result, error,
+        ...(logDetails ? { request: capped(request), shared: capped(shared) } : {}) });
+      return;
+    }
     if (msg.type === "req") handleRequest(sock, msg);
   };
 
@@ -77,6 +90,7 @@ async function connect() {
 // WhatsApp tab opened before an extension reload has no script. When that
 // happens, attach the scripts now and try once more.
 const CONTENT_JS = ["content/selectors.js", "content/reader.js", "content/main.js"];
+const PAGE_HOOK_JS = ["content/page-hook.js"];
 const CONTENT_CSS = ["content/privacy.css"];
 async function sendToTab(tab, msg) {
   try {
@@ -85,6 +99,7 @@ async function sendToTab(tab, msg) {
     if (!/Receiving end does not exist|Could not establish connection/i.test(e.message)) throw e;
     try {
       await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: CONTENT_CSS });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: PAGE_HOOK_JS, world: "MAIN" }).catch(() => {});
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: CONTENT_JS });
     } catch (inj) {
       throw new Error("Chrome won't let WA Bridge into the WhatsApp tab. In chrome://extensions → WA Bridge → Details, " +
@@ -182,6 +197,7 @@ function summarizeResult(tool, d = {}) {
     case "get_pending_replies": return d.auto_reply_on ? `${d.pending?.length ?? 0} ${(d.pending?.length ?? 0) === 1 ? "chat" : "chats"} waiting for a reply` : "auto-reply is off";
     case "suggest_reply": return `suggested a reply for "${d.chat}" (waiting for you)`;
     case "inspect_layout": return "page structure only (no messages or names)";
+    case "get_voice_audio": return `voice note from "${d.from}" (${d.duration || "?"}) passed to the transcriber on this computer, not to Claude`;
     case "send_message": return {
       sent: `sent to "${d.chat}" ${/automatically/.test(d.how || "") ? "after the countdown" : "after you clicked Send"}${d.edited_by_user ? " (you edited it)" : ""}`,
       cancelled: `you cancelled a message to "${d.chat}"`,

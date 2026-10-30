@@ -130,6 +130,19 @@
   </section>
 
   <section>
+    <h2>Voice notes</h2>
+    <div class="row"><label for="allowVoice">Claude can ask for voice notes as text</label><input type="checkbox" class="switch" id="allowVoice" /></div>
+    <div class="row">
+      <label for="sttModel">Transcription</label>
+      <select id="sttModel" style="width:auto">
+        <option value="small">Accurate (240 MB, best for Arabic, Malayalam…)</option>
+        <option value="base">Fast (75 MB)</option>
+      </select>
+    </div>
+    <p class="hint">Voice notes are turned into text on this computer with Whisper. The audio never leaves your PC; Claude only gets the text. The model downloads once, on first use.</p>
+  </section>
+
+  <section>
     <h2>Auto-reply</h2>
     <div class="row"><label for="autoReply">Suggest replies to new messages</label><input type="checkbox" class="switch" id="autoReply" /></div>
     <p class="hint">Uses Claude through your Pro plan. While WhatsApp is open, new messages in the chats below are queued; Claude checks the queue (every 5 minutes in watch mode, or when you ask) and suggests replies here for you to approve. Nothing is sent without your approval.</p>

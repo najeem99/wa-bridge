@@ -57,6 +57,7 @@ doc.getElementById("pane-side").addEventListener("mousedown", (e) => {
           <div class="quoted"><span class="selectable-text">Did you eat?</span></div>
           <span class="selectable-text"><span>Yes, pasta</span></span></div></div></div></div>
         <div role="row"><div data-id="false_15550001234@c.us_A3"><div><img alt=""></div></div></div>
+        <div role="row"><div data-id="false_15550001234@c.us_V1"><div class="voice"><button aria-label="Play voice message"><span data-icon="audio-play"></span></button><div class="dur">0:06</div></div></div></div>
         <div role="row"><div data-id="false_15550001234@c.us_A4"><div><div data-pre-plain-text="[22:01, 26/10/2026] Sam 🙂: ">
           <span class="selectable-text"><span>Reached home?</span></span></div></div></div></div>`;
     }, 600);
@@ -71,6 +72,20 @@ doc.getElementById("pane-side").addEventListener("mousedown", (e) => {
 // WhatsApp's Send button: posts whatever is in the box, then empties it.
 const reallySent = [];
 const sentQuotes = [];
+
+// Mock of WhatsApp's voice player: pressing play decrypts the note into a blob and plays it.
+const VOICE_BYTES = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 1, 2, 3, 4, 5, 6]);
+let voiceLoads = 0;
+doc.addEventListener("click", (e) => {
+  const play = e.target.closest?.('button[aria-label="Play voice message"]');
+  if (!play) return;
+  voiceLoads++;
+  setTimeout(() => {
+    const a = new window.Audio();
+    a.src = window.URL.createObjectURL(new window.Blob([VOICE_BYTES], { type: "audio/ogg; codecs=opus" }));
+    a.play();
+  }, 50);
+});
 
 // Mock of WhatsApp's per-message Reply: right-click menu, or hover → menu button.
 const replyMode = { contextmenu: true, hover: true };
@@ -153,6 +168,20 @@ window.chrome = {
   runtime: { id: "test", onMessage: { addListener: (f) => msgListeners.push(f) }, sendMessage: async (m) => { sent.push(m); } },
 };
 
+// jsdom lacks blob URLs and fetch; give it minimal versions like Chrome's.
+const blobs = new Map();
+let blobN = 0;
+window.URL.createObjectURL = (b) => { const u = "blob:https://web.whatsapp.com/" + (++blobN); blobs.set(u, b); return u; };
+window.fetch = async (u) => {
+  const b = blobs.get(String(u));
+  if (!b) throw new Error("fetch failed");
+  const arrayBuffer = () => new Promise((res) => { const fr = new window.FileReader(); fr.onload = () => res(fr.result); fr.readAsArrayBuffer(b); });
+  return { ok: true, headers: { get: () => b.type }, arrayBuffer };
+};
+let audiblePlays = 0;
+window.HTMLMediaElement.prototype.play = function () { if (!this.muted) audiblePlays++; return Promise.resolve(); };
+window.HTMLMediaElement.prototype.pause = function () {};
+window.eval(readFileSync(ext + "/page-hook.js", "utf8"));
 for (const f of ["selectors.js", "reader.js", "main.js"]) window.eval(readFileSync(ext + "/" + f, "utf8"));
 await new Promise((r) => setTimeout(r, 1300)); // let main.js find the sidebar
 
@@ -334,8 +363,8 @@ doc.getElementById("pane-side").removeEventListener("mousedown", countClicks);
 // 14. get_messages waits for messages and reads them by data-id.
 r = await call("get_messages", { chat: "Sam 🙂", limit: 5 });
 if (!r.ok) console.log("ERROR:", r.error);
-assert(r.ok && r.data.messages.length === 4, "new layout: found all 4 messages after they rendered late (" + (r.data.messages?.length) + ")");
-const [m1, m2, m3, m4] = r.data.messages;
+assert(r.ok && r.data.messages.length === 5, "new layout: found all 5 messages after they rendered late (" + (r.data.messages?.length) + ")");
+const [m1, m2, m3, mv, m4] = r.data.messages;
 assert(m1.from === "Sam 🙂" && m1.direction === "in" && m1.text === "Did you eat?" && m1.time === "21:58", "incoming parsed from data-id false_");
 assert(m2.from === "me" && m2.direction === "out" && m2.text === "Yes, pasta", "outgoing from data-id true_; quoted reply not mistaken for the message");
 assert(m3.text === "[media or non-text message]", "photo marked as media");
@@ -344,7 +373,7 @@ assert(m4.text === "Reached home?", "latest message read");
 // 15. inspect_layout reports structure only, never text or names.
 r = await call("inspect_layout");
 const layoutJson = JSON.stringify(r.data);
-assert(r.ok && r.data.counts["data-id true_/false_"] === 4 && r.data.messages_found_by_reader === 4, "inspect_layout counts message rows");
+assert(r.ok && r.data.counts["data-id true_/false_"] === 5 && r.data.messages_found_by_reader === 5, "inspect_layout counts message rows");
 assert(!/pasta|Reached|Did you eat|Sam|21:58/.test(layoutJson), "inspect_layout contains no message text, names or times");
 
 // 16. Existing draft: error shows what's there; replace_draft clears it.
@@ -402,6 +431,25 @@ humanClick(dialogButton("Cancel"));
 r = await p;
 assert(r.data.status === "cancelled" && cbox().textContent === "" && !doc.querySelector("#main footer .quote"), "cancel clears the text and the quote");
 await window.chrome.storage.local.set({ sendMode: "confirm" });
+
+// ---------- voice notes ----------
+r = await call("get_messages", { chat: "Sam 🙂", limit: 10 });
+const vm = r.data.messages.find((m) => m.voice);
+assert(vm && vm.text === "[voice message 0:06]" && vm.duration === "0:06" && vm.ref, "get_messages marks voice notes with duration and a ref");
+const loadsBefore = voiceLoads, audibleBefore = audiblePlays;
+r = await call("get_voice_audio", { chat: "Sam 🙂" });
+assert(r.ok && r.data.ref === vm.ref && r.data.duration === "0:06" && r.data.stt_model === "small", "latest voice note picked by default");
+assert(atob(r.data.audio_base64).split("").map((c) => c.charCodeAt(0)).join() === Array.from(VOICE_BYTES).join() && r.data.type.startsWith("audio/ogg"), "the decrypted audio bytes are captured exactly");
+assert(voiceLoads === loadsBefore + 1 && audiblePlays === audibleBefore, "played once, muted (you don't hear it)");
+assert(!doc.documentElement.hasAttribute("data-wa-bridge-grab"), "mute flag removed afterwards");
+r = await call("get_voice_audio", { chat: "Sam 🙂", message: target.ref });
+assert(!r.ok && /isn't a voice note/.test(r.error), "asking for a text message as a voice note: clear error");
+r = await call("get_voice_audio", { chat: "Secret" });
+assert(!r.ok && /allowlist/.test(r.error), "voice notes respect the allowlist");
+await window.chrome.storage.local.set({ allowVoice: false });
+r = await call("get_voice_audio", { chat: "Sam 🙂" });
+assert(!r.ok && /turned off/.test(r.error), "voice transcription can be switched off");
+await window.chrome.storage.local.set({ allowVoice: true });
 
 // ---------- auto-reply (content side) ----------
 const humanType = (el, v) => { el.value = v; };
