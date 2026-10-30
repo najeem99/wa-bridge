@@ -1,0 +1,23 @@
+{
+  "name": "wa-bridge",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Privacy tools for WhatsApp Web plus a text-only, allowlisted bridge to Claude Desktop (MCP).",
+  "type": "module",
+  "scripts": {
+    "postinstall": "npm --prefix server install",
+    "test": "node tests/server.test.mjs && node tests/page.test.mjs && node tests/background.test.mjs",
+    "test:server": "node tests/server.test.mjs",
+    "test:page": "node tests/page.test.mjs",
+    "test:background": "node tests/background.test.mjs",
+    "screenshots": "node scripts/screenshots.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "jsdom": "^24.1.3",
+    "ws": "^8.18.0"
+  }
+}

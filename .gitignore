@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Pairing token lives in ~/.wa-bridge, never in the repo, but just in case
+token
+.wa-bridge/
+
+# Secrets and local env
+.env
+.env.*
+*.pem
+
+# Build / packaging artifacts
+*.zip
+*.crx
+dist/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log

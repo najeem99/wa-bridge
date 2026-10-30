@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WA Bridge</title>
+<style>
+  :root {
+    --bg: #faf9f5; --card: #ffffff; --ink: #1f1e1d; --muted: #6b6a66; --line: #e6e3da;
+    --accent: #d97757; --ok: #2e8b57; --warn: #b8860b; --bad: #c0392b; --chip: #f1eee6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1a1918; --card: #242322; --ink: #ecebe6; --muted: #9c9a93; --line: #34322f; --chip: #2f2d2b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 16px 16px 8px; display: flex; align-items: center; gap: 10px; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.connected { background: var(--ok); } .dot.connecting { background: var(--warn); }
+  .dot.disconnected, .dot.bad-token, .dot.needs-token { background: var(--bad); }
+  #statusText { color: var(--muted); font-size: 12px; margin-left: auto; text-align: right; }
+  section { margin: 8px 12px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .row label { flex: 1; min-width: 0; }
+  .row select { flex: 0 1 auto; max-width: 62%; min-width: 0; text-overflow: ellipsis; }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  input[type=text], input[type=password], select {
+    width: 100%; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); font: inherit;
+  }
+  button {
+    padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip);
+    color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap;
+  }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { background: var(--chip); border-radius: 999px; padding: 3px 4px 3px 10px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+  .chip button { border: none; background: transparent; padding: 0 6px; color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; }
+  .warn { color: var(--bad); font-size: 12px; }
+  #log { list-style: none; margin: 0; padding: 0; max-height: 45vh; overflow: auto; }
+  #log li { padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  #log li:first-child { border-top: none; }
+  .tool { font-weight: 600; }
+  .t { color: var(--muted); font-size: 11px; float: right; }
+  .res { color: var(--muted); }
+  .err { color: var(--bad); }
+  .switch { appearance: none; width: 34px; height: 20px; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch:checked { background: var(--accent); } .switch:checked::after { left: 16px; }
+  datalist { display: none; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>WA Bridge</h1>
+    <span id="statusText">…</span>
+  </header>
+
+  <section id="pairing">
+    <h2>Pairing</h2>
+    <div class="row">
+      <input type="password" id="token" placeholder="Pairing token" autocomplete="off" />
+      <button class="primary" id="saveToken">Save</button>
+    </div>
+    <p class="hint">Find it in <code>~/.wa-bridge/token</code> on your computer (created the first time Claude Desktop starts the server).</p>
+  </section>
+
+  <section>
+    <h2>Privacy</h2>
+    <div class="row"><label for="blur">Blur WhatsApp until hover <span class="hint">(Alt+X)</span></label><input type="checkbox" class="switch" id="blur" /></div>
+    <div class="row">
+      <label for="notifyMode">Notifications</label>
+      <select id="notifyMode" style="width:auto">
+        <option value="private">Private (no name)</option>
+        <option value="name">Name only</option>
+        <option value="preview">Name + preview (allowed chats)</option>
+        <option value="off">Off</option>
+      </select>
+    </div>
+  </section>
+
+  <section>
+    <h2>Chats Claude can read</h2>
+    <div class="row">
+      <input type="text" id="addName" list="chatNames" placeholder="Exact chat name" />
+      <button id="addBtn">Add</button>
+    </div>
+    <datalist id="chatNames"></datalist>
+    <p class="hint">Suggestions come from your open WhatsApp tab. Claude can list chat names, but can only read or draft in these.</p>
+    <div class="chips" id="chips"></div>
+    <div class="row" style="margin-top:12px">
+      <label for="allowAll">Allow all chats</label><input type="checkbox" class="switch" id="allowAll" />
+    </div>
+    <p class="warn" id="allowAllWarn" hidden>Every chat is readable by Claude right now.</p>
+    <div class="row" style="margin-top:12px">
+      <label for="allowSend">Claude can send messages</label><input type="checkbox" class="switch" id="allowSend" />
+    </div>
+    <div class="row">
+      <label for="sendMode">Before sending</label>
+      <select id="sendMode" style="width:auto">
+        <option value="countdown">5-second countdown, then send</option>
+        <option value="confirm">Ask me every time</option>
+      </select>
+    </div>
+    <p class="hint">Only to chats above. During the countdown you can cancel (Esc) or edit the text, which pauses it.</p>
+  </section>
+
+  <section>
+    <h2>Auto-reply</h2>
+    <div class="row"><label for="autoReply">Suggest replies to new messages</label><input type="checkbox" class="switch" id="autoReply" /></div>
+    <p class="hint">Uses Claude through your Pro plan. While WhatsApp is open, new messages in the chats below are queued; Claude checks the queue (every 5 minutes in watch mode, or when you ask) and suggests replies here for you to approve. Nothing is sent without your approval.</p>
+
+    <div id="arBody">
+      <p class="hint" id="queueInfo" style="margin-top:8px"></p>
+      <label for="arNote" style="display:block;margin-top:10px;font-weight:600">What Claude can answer</label>
+      <textarea id="arNote" rows="6" placeholder="e.g.&#10;Office: Example Tower, 5th floor. Hours 9–6, Mon–Fri.&#10;If someone asks to call: say I'll call back after 7pm.&#10;Don't agree to any plans or payments."
+        style="width:100%;margin-top:6px;padding:8px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;resize:vertical"></textarea>
+      <p class="hint" id="noteSaved">Claude only uses this note and the conversation. Saved automatically.</p>
+
+      <div style="font-weight:600;margin-top:10px">Chats with auto-reply</div>
+      <div class="row">
+        <input type="text" id="arAddName" list="chatNames" placeholder="Exact chat name" />
+        <button id="arAddBtn">Add</button>
+      </div>
+      <div class="chips" id="arChips"></div>
+      <p class="hint">Separate from the read list on purpose, so groups aren't auto-answered by accident.</p>
+
+      <div style="font-weight:600;margin-top:12px">Waiting for you</div>
+      <ul id="suggList" style="list-style:none;margin:6px 0 0;padding:0"></ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>What Claude did</h2>
+    <ul id="log"><li class="empty">Nothing yet.</li></ul>
+    <div class="row" style="justify-content:flex-end"><button id="clearLog">Clear</button></div>
+  </section>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
