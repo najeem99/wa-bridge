@@ -85,6 +85,8 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong", t: msg.t })); return; }
+
     if (msg.type === "res" && pending.has(msg.id)) {
       const p = pending.get(msg.id);
       pending.delete(msg.id);
@@ -155,7 +157,8 @@ server.registerTool("list_chats", {
 
 server.registerTool("get_messages", {
   title: "Get messages",
-  description: "Open an allowlisted chat and return its last N messages (sender, text, time, direction). " +
+  description: "Open an allowlisted chat and return its last N messages (ref, sender, text, time, direction). " +
+    "Pass a message's ref as reply_to in send_message/draft_reply to reply to that specific message. " +
     "Note: opening the chat marks it as read in WhatsApp.",
   inputSchema: {
     chat: z.string().min(1).describe("Exact chat name as shown by list_chats"),
@@ -189,6 +192,9 @@ server.registerTool("draft_reply", {
     chat: z.string().min(1),
     text: z.string().min(1).max(4000),
     replace_draft: z.boolean().default(false).describe("Clear an existing unsent draft first. Only after the user agreed."),
+    reply_to: z.string().min(1).max(200).optional().describe(
+      "Reply to a specific message (WhatsApp quoted reply): a message ref from get_messages (e.g. \"m3k9x2\"), " +
+      "or a few exact words from that message. Omit for a normal message."),
   },
 }, run("draft_reply"));
 
@@ -203,6 +209,9 @@ server.registerTool("send_message", {
     chat: z.string().min(1).describe("Exact chat name as shown by list_chats"),
     text: z.string().min(1).max(4000),
     replace_draft: z.boolean().default(false).describe("Clear an existing unsent draft first. Only after the user agreed."),
+    reply_to: z.string().min(1).max(200).optional().describe(
+      "Reply to a specific message (WhatsApp quoted reply): a message ref from get_messages (e.g. \"m3k9x2\"), " +
+      "or a few exact words from that message. Omit for a normal message."),
   },
   annotations: { destructiveHint: true, idempotentHint: false },
 }, run("send_message", CONFIRM_WINDOW_MS + 15_000));

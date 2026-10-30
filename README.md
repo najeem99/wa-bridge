@@ -71,7 +71,9 @@ WA Bridge takes a different approach:
 **Privacy tools (no AI needed)**
 - 🌫️ **Blur mode**: names, photos and messages blurred until you hover (`Alt+X`)
 - 🔕 **Private notifications**: "New WhatsApp message" with no name or preview
-- 📜 **Activity log** of everything Claude did, without the message text
+- 💬 **Quoted replies**: Claude can reply under a specific message, like WhatsApp's own Reply
+- 📜 **Activity log** of everything Claude did; expand any entry to see exactly which contacts and messages Claude received
+- 🔄 **Connection check**: a refresh button that really tests the link (the dot blinks green/red while connecting)
 - 👀 **Visible actions**: a banner shows what Claude is doing, and the chat it touches is outlined
 
 ## How it works
@@ -95,11 +97,11 @@ flowchart LR
 | Tool | What it does | Marks chat read? |
 |---|---|---|
 | `list_chats` | Chats loaded in the sidebar: name, unread count, time. Previews only for allowed chats. | No |
-| `get_messages` | Last _N_ messages (default 5) of an **allowed** chat: sender, direction, time, text. | **Yes** (opens it) |
+| `get_messages` | Last _N_ messages (default 5) of an **allowed** chat: `ref`, sender, direction, time, text. | **Yes** (opens it) |
 | `get_new_messages` | New activity since the last check, from the sidebar. Other chats are only counted. | No |
 | `find_contact` | Search by name with WhatsApp's search box. Names only. | No |
-| `draft_reply` | Type a draft into an allowed chat. `replace_draft` clears an existing draft. | Yes |
-| `send_message` | Type and send to an allowed chat, after the countdown or your confirmation. | Yes |
+| `draft_reply` | Type a draft into an allowed chat. `replace_draft` clears an existing draft; `reply_to` quotes a message. | Yes |
+| `send_message` | Type and send to an allowed chat, after the countdown or your confirmation. `reply_to` sends it as a quoted reply. | Yes |
 | `get_pending_replies` | Auto-reply queue: new messages in auto-reply chats, plus your note. | No |
 | `suggest_reply` | Show a proposed reply as an approval card. **Never sends by itself.** | No |
 | `inspect_layout` | Page structure diagnostic. **No text, names or times.** | No |
@@ -171,6 +173,14 @@ When Claude sends a message, a card appears at the bottom right of WhatsApp: **"
 
 Prefer to approve every message? Side panel → **Before sending → Ask me every time**. Or switch **Claude can send messages** off entirely.
 
+### Replying to a specific message
+
+Ask *"reply to Ahmed's message about the report: on it, will send by 10"*. Claude finds the message and sends a **quoted reply**, exactly like choosing **Reply** in WhatsApp.
+
+- `get_messages` gives every message a short `ref` (e.g. `m3k9x2`). It's a one-way hash of WhatsApp's message ID, so it contains no phone number.
+- `reply_to` takes that ref, or a few exact words from the message (the latest match wins).
+- The extension uses WhatsApp's own Reply action (right-click menu, or the message's menu button) and checks the quote appeared before typing anything. The countdown card shows *"Replying to …"*, and Cancel removes both the text and the quote.
+
 ### Drafts
 
 If a chat already has unsent text in its box, Claude won't overwrite it. It tells you what's there and asks whether to replace it (`replace_draft`).
@@ -223,7 +233,7 @@ sequenceDiagram
 - ✅ **Allowlists** are enforced in the extension, not by asking the AI nicely.
 - 🖱️ **Only real clicks approve.** Confirm and approve buttons ignore script-generated clicks (`event.isTrusted`), so a web page can't approve on your behalf.
 - ⌨️ Typing uses `insertText` / `insertLineBreak`; an Enter key is never simulated while drafting, so nothing is sent by accident.
-- 🧾 The activity log stores **what was asked and how much came back**, never message text.
+- 🧾 The activity log shows **what Claude asked for and exactly what it received** (contacts and messages), so you can audit every call. It's stored **only in this browser**; switch off **Record what was shared** to keep just one-line summaries, or **Clear** it any time.
 - ☎️ WhatsApp message IDs (which contain phone numbers) **never leave the tab**.
 - 🩺 `inspect_layout` returns structure only; a test asserts it contains no text, names or times.
 
@@ -239,6 +249,7 @@ sequenceDiagram
 | Chats Claude can read | none | Allowlist for reading, drafting and sending |
 | Allow all chats | Off | Makes every chat readable. Use for testing only. |
 | Claude can send messages | On | Master switch for `send_message` |
+| Record what was shared | On | Keep the full details of each call in the log (this browser only) |
 | Before sending | 5-second countdown | Or "Ask me every time" |
 | Suggest replies to new messages | Off | Auto-reply queue |
 | What Claude can answer | empty | Your note for auto-reply |
@@ -250,6 +261,7 @@ sequenceDiagram
 |---|---|
 | **"Couldn't load app settings… claude_desktop_config.json"** | The config JSON is invalid. Check for a stray `{` or a missing comma, make sure there's only one `"mcpServers"` key, and use `"C:/…"`, not `"/C:/…"`. |
 | Side panel dot is **red** | Claude Desktop isn't running, or the server didn't start. Fully quit and reopen Claude Desktop. The dot turns green within ~30 s. |
+| Dot is green but Claude can't reach WhatsApp | Click **↻** next to the status. It pings the server and reconnects if needed; the dot blinks green/red while it checks. |
 | **"Token rejected"** | Paste the current contents of `~/.wa-bridge/token` again. |
 | **"Receiving end does not exist"** | The WhatsApp tab predates the extension. Newer versions re-attach automatically; otherwise press F5 on WhatsApp. |
 | **"Clicked … but the chat did not open"** | The error shows what the header contains. Update the matching selectors in `extension/content/selectors.js`. |

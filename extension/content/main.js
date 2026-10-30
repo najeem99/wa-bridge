@@ -62,7 +62,7 @@
   // mode "confirm": a full-screen box that waits for a Send click.
   // Resolves to "auto", "send", "draft", "cancel" or "timeout".
   // A clicked "Send" only counts if a real person clicked it (isTrusted).
-  function askToSend(chat, text, mode, delaySec) {
+  function askToSend(chat, text, mode, delaySec, replyTo = null) {
     return new Promise((resolve) => {
       const countdown = mode === "countdown";
       const wrap = document.createElement("div");
@@ -77,6 +77,9 @@
       const to = document.createElement("div");
       to.className = "wa-bridge-confirm-to";
       to.textContent = "To: " + chat;
+      const quote = document.createElement("div");
+      quote.className = "wa-bridge-confirm-quote";
+      if (replyTo) quote.textContent = `Replying to ${replyTo.from === "me" ? "your message" : replyTo.from}: “${replyTo.text.length > 90 ? replyTo.text.slice(0, 90) + "…" : replyTo.text}”`;
       const body = document.createElement("div");
       body.className = "wa-bridge-confirm-text";
       body.textContent = text;
@@ -94,7 +97,9 @@
       const draft = mk("Keep as draft", "wa-bridge-btn");
       const send = mk(countdown ? "Send now" : "Send", "wa-bridge-btn wa-bridge-btn-send");
       btns.append(cancel, draft, send);
-      card.append(h, to, body, hint);
+      card.append(h, to);
+      if (replyTo) card.appendChild(quote);
+      card.append(body, hint);
       if (countdown) card.appendChild(bar);
       card.appendChild(btns);
       wrap.appendChild(card);
@@ -189,6 +194,25 @@
     return "typed-needed";
   }
 
+  // Opens the chat, makes the box ready and, if asked, attaches WhatsApp's
+  // quoted reply to one message. Returns { box, replyTo } (replyTo = what Claude sees).
+  async function prepareMessage(chat, text, replaceDraft, replyTo) {
+    await R.openChat(chat);
+    let target = null;
+    if (replyTo) {
+      await R.waitForMessages();
+      target = R.findMessage(replyTo);
+      if (!target) throw new Error(`No message matching "${replyTo}" in "${chat}". Use a ref from get_messages or a few exact words from the message. Nothing was typed.`);
+    }
+    const box = waQ("composeBox");
+    if (!box) throw new Error("Could not find the message box.");
+    const needTyping = await prepareBox(box, text, replaceDraft) === "typed-needed";
+    if (target) await R.attachReply(target);
+    if (needTyping) await R.typeInto(waQ("composeBox") || box, text);
+    R.highlight(waQ("composeBox") || box);
+    return { replyTo: target ? { ref: target.ref, from: target.from, time: target.time, text: target.text.slice(0, 200) } : null };
+  }
+
   // ---------- tools ----------
   const tools = {
     async list_chats({ unread_only = false, limit = 30 } = {}) {
@@ -213,7 +237,7 @@
       await R.openChat(chat);
       await R.waitForMessages();
       // The internal id contains phone numbers, so it never leaves this tab.
-      const messages = R.readMessages(limit).map(({ id, ...m }) => m);
+      const messages = R.readMessages(limit).map(({ id, node, ...m }) => m);
       return messages.length
         ? { chat, messages }
         : { chat, messages, note: "No messages found on screen. If this chat does have messages, WhatsApp's layout may have changed; run inspect_layout." };
@@ -248,33 +272,25 @@
       return { query, results: names };
     },
 
-    async draft_reply({ chat, text, replace_draft = false }) {
+    async draft_reply({ chat, text, replace_draft = false, reply_to }) {
       if (!isAllowed(chat)) refuse(chat);
-      showActivity(`drafting reply in "${chat}"`);
-      await R.openChat(chat);
-      const box = waQ("composeBox");
-      if (!box) throw new Error("Could not find the message box.");
-      if (await prepareBox(box, text, replace_draft) === "typed-needed") await R.typeInto(box, text);
-      R.highlight(box);
-      return { chat, drafted: true, sent: false, note: "Draft typed. The user must review and press send." };
+      showActivity(reply_to ? `drafting a reply to a message in "${chat}"` : `drafting reply in "${chat}"`);
+      const { replyTo } = await prepareMessage(chat, text, replace_draft, reply_to);
+      return { chat, drafted: true, sent: false, replying_to: replyTo || undefined, note: "Draft typed. The user must review and press send." };
     },
 
-    async send_message({ chat, text, replace_draft = false }) {
+    async send_message({ chat, text, replace_draft = false, reply_to }) {
       if (!settings.allowSend) throw new Error("Sending is turned off in the WA Bridge side panel. Use draft_reply instead.");
       if (!isAllowed(chat)) refuse(chat);
       if (pendingConfirm) throw new Error("Another message is already waiting for the user's confirmation.");
       pendingConfirm = chat;
       try {
-        showActivity(`preparing a message to "${chat}"`);
-        await R.openChat(chat);
-        const box = waQ("composeBox");
-        if (!box) throw new Error("Could not find the message box.");
-        if (await prepareBox(box, text, replace_draft) === "typed-needed") await R.typeInto(box, text);
-        R.highlight(box);
+        showActivity(reply_to ? `preparing a reply in "${chat}"` : `preparing a message to "${chat}"`);
+        const { replyTo } = await prepareMessage(chat, text, replace_draft, reply_to);
 
         const mode = settings.sendMode;
         chrome.runtime.sendMessage({ kind: "confirmPending", chat, mode, delaySec: settings.sendDelaySec }).catch(() => {});
-        const choice = await askToSend(chat, text, mode, settings.sendDelaySec);
+        const choice = await askToSend(chat, text, mode, settings.sendDelaySec, replyTo);
         chrome.runtime.sendMessage({ kind: "confirmDone" }).catch(() => {});
 
         if (choice === "send" || choice === "auto") {
@@ -289,11 +305,13 @@
           return {
             chat, status: "sent", text: finalText,
             how: choice === "auto" ? `sent automatically after the ${settings.sendDelaySec}s countdown` : "user clicked Send",
+            replying_to: replyTo || undefined,
             edited_by_user: R.norm(finalText) !== R.norm(text),
           };
         }
         if (choice === "cancel") {
           await clearComposeBox();
+          if (replyTo) await R.cancelReply();
           return { chat, status: "cancelled", note: "The user cancelled. The text was removed. Do not retry unless asked." };
         }
         if (choice === "draft") {
@@ -368,7 +386,7 @@
     chrome.runtime.sendMessage({
       kind: "incoming", chat: name,
       incoming: [last.text],
-      context: msgs.map(({ id, ...m }) => m), // ids hold phone numbers; keep them here
+      context: msgs.map(({ id, node, ref, ...m }) => m), // ids hold phone numbers; keep them here
     }).catch(() => {});
   }
   setInterval(watchOpenChat, 2000);

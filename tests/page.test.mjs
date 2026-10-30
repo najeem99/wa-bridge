@@ -70,13 +70,47 @@ doc.getElementById("pane-side").addEventListener("mousedown", (e) => {
 });
 // WhatsApp's Send button: posts whatever is in the box, then empties it.
 const reallySent = [];
+const sentQuotes = [];
+
+// Mock of WhatsApp's per-message Reply: right-click menu, or hover → menu button.
+const replyMode = { contextmenu: true, hover: true };
+const openMenu = (target) => {
+  doc.getElementById("ctxmenu")?.remove();
+  doc.body.insertAdjacentHTML("beforeend",
+    '<div role="application" id="ctxmenu"><ul><li role="button" aria-label="Copy">Copy</li><li role="button" aria-label="Reply">Reply</li><li role="button" aria-label="Delete">Delete</li></ul></div>');
+  doc.getElementById("ctxmenu").__target = target;
+};
+doc.addEventListener("contextmenu", (e) => {
+  const m = e.target.closest?.('[data-id]');
+  if (m && replyMode.contextmenu) openMenu(m);
+});
+doc.addEventListener("mouseover", (e) => {
+  const m = e.target.closest?.('[data-id]');
+  if (m && replyMode.hover && !m.querySelector(".menubtn")) m.insertAdjacentHTML("afterbegin", '<span class="menubtn" role="button" aria-label="Context menu"><span data-icon="down-context"></span></span>');
+});
+doc.addEventListener("click", (e) => {
+  const mb = e.target.closest?.(".menubtn");
+  if (mb) { openMenu(mb.closest("[data-id]")); return; }
+  const item = e.target.closest?.('#ctxmenu li[aria-label="Reply"]');
+  if (item) {
+    const target = doc.getElementById("ctxmenu").__target;
+    doc.getElementById("ctxmenu").remove();
+    doc.querySelector("#main footer .quote")?.remove();
+    const text = target.querySelector("span.selectable-text")?.textContent || "";
+    doc.querySelector("#main footer").insertAdjacentHTML("afterbegin", `<div class="quote"><span>${text}</span><button aria-label="Cancel reply">x</button></div>`);
+    return;
+  }
+  if (e.target.closest?.('[aria-label="Cancel reply"]')) doc.querySelector("#main footer .quote")?.remove();
+});
 doc.getElementById("main").addEventListener("click", (e) => {
   const btn = e.target.closest('button[aria-label="Send"]');
   if (!btn) return;
   const box = doc.querySelector("#main footer [contenteditable]");
   if (!box.textContent.trim()) return;
+  const quote = doc.querySelector("#main footer .quote span");
   reallySent.push(box.textContent);
-  box.insertAdjacentHTML("beforebegin", "");
+  sentQuotes.push(quote ? quote.textContent : null);
+  doc.querySelector("#main footer .quote")?.remove();
   doc.querySelector("#main footer").insertAdjacentHTML("beforebegin",
     `<div class="message-out"><div class="copyable-text" data-pre-plain-text="[21:00, 26/10/2026] Me: "><span class="selectable-text">${box.textContent}</span></div></div>`);
   box.textContent = "";
@@ -325,6 +359,50 @@ r = await call("draft_reply", { chat: "Sam 🙂", text: "Drafted", replace_draft
 assert(r.ok && cbox().textContent === "Drafted", "draft_reply replace_draft works too");
 cbox().textContent = "";
 
+// ---------- quoted replies (reply_to) ----------
+r = await call("get_messages", { chat: "Sam 🙂", limit: 5 });
+const refs = r.data.messages.map((m) => m.ref);
+assert(refs.every((x) => /^m[0-9a-z]+$/.test(x)) && new Set(refs).size === refs.length, "get_messages gives each message a short unique ref");
+assert(!JSON.stringify(r.data).includes("@c.us") && !JSON.stringify(r.data).includes("15550001234") && r.data.messages.every((m) => !("node" in m) && !("id" in m)), "refs leak no phone numbers or page internals");
+const target = r.data.messages.find((m) => m.text === "Did you eat?");
+let r2 = await call("get_messages", { chat: "Sam 🙂", limit: 5 });
+assert(r2.data.messages.find((m) => m.text === "Did you eat?").ref === target.ref, "refs are stable between reads");
+
+// 23. Reply by ref (right-click menu), auto-send after countdown.
+await window.chrome.storage.local.set({ sendMode: "countdown", sendDelaySec: 1 });
+p = call("send_message", { chat: "Sam 🙂", text: "Yes, had lunch", reply_to: target.ref });
+dlg = await waitDialog();
+assert(/Replying to Sam 🙂: “Did you eat\?”/.test(dlg.textContent), "countdown card shows which message is being replied to");
+r = await p;
+assert(r.ok && r.data.status === "sent" && r.data.replying_to?.text === "Did you eat?" && r.data.replying_to.ref === target.ref, "send_message reports the message it replied to");
+assert(reallySent.at(-1) === "Yes, had lunch" && sentQuotes.at(-1) === "Did you eat?", "sent as a WhatsApp quoted reply to that message");
+
+// 24. Reply by words, via the hover menu button (no right-click menu in this layout).
+replyMode.contextmenu = false;
+r = await call("draft_reply", { chat: "Sam 🙂", text: "On my way", reply_to: "reached home" });
+assert(r.ok && r.data.replying_to?.text === "Reached home?" && cbox().textContent === "On my way" && /Reached home\?/.test(doc.querySelector("#main footer .quote")?.textContent || ""), "reply_to by words works through the hover menu; draft typed under the quote");
+doc.querySelector('#main footer [aria-label="Cancel reply"]').click(); cbox().textContent = "";
+replyMode.contextmenu = true;
+
+// 25. Unknown target: clear error, nothing typed.
+r = await call("send_message", { chat: "Sam 🙂", text: "x", reply_to: "this text is not in the chat" });
+assert(!r.ok && /No message matching/.test(r.error) && cbox().textContent === "" && !doc.querySelector(".wa-bridge-confirm"), "unknown reply target: refused before typing");
+
+// 26. WhatsApp offers no Reply option: clear error, nothing typed.
+replyMode.contextmenu = false; replyMode.hover = false;
+doc.querySelectorAll(".menubtn").forEach((x) => x.remove());
+r = await call("draft_reply", { chat: "Sam 🙂", text: "x", reply_to: target.ref });
+assert(!r.ok && /Reply option/.test(r.error) && cbox().textContent === "", "no Reply menu: clear error, nothing typed");
+replyMode.contextmenu = true; replyMode.hover = true;
+
+// 27. Cancelling a reply removes both the text and the quote.
+p = call("send_message", { chat: "Sam 🙂", text: "never mind", reply_to: target.ref });
+await waitDialog();
+humanClick(dialogButton("Cancel"));
+r = await p;
+assert(r.data.status === "cancelled" && cbox().textContent === "" && !doc.querySelector("#main footer .quote"), "cancel clears the text and the quote");
+await window.chrome.storage.local.set({ sendMode: "confirm" });
+
 // ---------- auto-reply (content side) ----------
 const humanType = (el, v) => { el.value = v; };
 await window.chrome.storage.local.set({ autoReply: true, autoReplyChats: ["Sam 🙂"] });
@@ -415,7 +493,7 @@ doc.getElementById("side").prepend(oldSearch);
 await window.chrome.storage.local.set({ allowSend: false });
 r = await call("send_message", { chat: "Family", text: "blocked" });
 assert(!r.ok && /turned off/.test(r.error) && !doc.querySelector(".wa-bridge-confirm"), "sending switched off in side panel: refused, no dialog");
-assert(reallySent.length === 8, "total messages actually sent across all tests: 8");
+assert(reallySent.length === 9, "total messages actually sent across all tests: 9");
 
 console.log("ALL PAGE TESTS PASSED");
 process.exit(0);

@@ -248,8 +248,97 @@
       const text = messageText(node, metaEl) || "[media or non-text message]";
       const rawId = node.getAttribute("data-id") || node.querySelector("[data-id]")?.getAttribute("data-id") || "";
       const id = MSG_ID_RE.test(rawId) ? rawId : `${meta.date}|${meta.time}|${out ? "out" : "in"}|${text.slice(0, 80)}`;
-      return { id, from: out ? "me" : meta.sender || "them", direction: out ? "out" : "in", time: meta.time, date: meta.date, text };
+      return { id, ref: refFor(id), from: out ? "me" : meta.sender || "them", direction: out ? "out" : "in", time: meta.time, date: meta.date, text, node };
     });
+  }
+
+  // A short, stable handle for a message that Claude can pass back (reply_to).
+  // One-way hash of the internal id, so the phone number in it never leaves the tab.
+  function refFor(id) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return "m" + (h >>> 0).toString(36);
+  }
+
+  // Finds a message in the open chat by ref, or by words from its text (latest match wins).
+  function findMessage(target) {
+    const want = norm(target);
+    if (!want) return null;
+    const all = readMessages(300);
+    const byRef = all.find((m) => m.ref === want);
+    if (byRef) return byRef;
+    const lower = want.toLowerCase();
+    const matches = all.filter((m) => m.text.toLowerCase().includes(lower));
+    return matches.length ? matches[matches.length - 1] : null;
+  }
+
+  // The quote preview above the message box: whatever sits in the footer
+  // (or just above it) besides the message box itself.
+  function quotePreviewText() {
+    const footer = document.querySelector("#main footer");
+    if (!footer) return "";
+    const box = waQ("composeBox");
+    const parts = [footer, footer.previousElementSibling].filter(Boolean);
+    let text = "";
+    for (const el of parts) {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll('[contenteditable="true"], button').forEach((x) => x.remove());
+      text += " " + (clone.textContent || "");
+    }
+    if (box) text = text.replace(box.textContent || "", "");
+    return norm(text);
+  }
+
+  function findReplyItem() {
+    const labels = window.WA_SELECTORS.replyLabels.map((l) => l.toLowerCase());
+    for (const sel of window.WA_SELECTORS.menuItem) {
+      let items = [];
+      try { items = [...document.querySelectorAll(sel)]; } catch { continue; }
+      const hit = items.find((el) => {
+        const t = norm(el.getAttribute("aria-label") || el.textContent).toLowerCase();
+        return labels.includes(t);
+      });
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // Opens WhatsApp's own "Reply" on a message so the next message is sent as a quoted reply.
+  async function attachReply(msg) {
+    const node = msg.node;
+    node.scrollIntoView?.({ block: "center" });
+    highlight(node);
+    const snippet = norm(msg.text).slice(0, 24).toLowerCase();
+    const quoted = () => snippet && quotePreviewText().toLowerCase().includes(snippet);
+    if (quoted()) return true; // already replying to it
+
+    // 1. Right-click menu.
+    const r = node.getBoundingClientRect?.() || { left: 0, top: 0, width: 0, height: 0 };
+    const at = { bubbles: true, cancelable: true, view: window, button: 2, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    node.dispatchEvent(new MouseEvent("contextmenu", at));
+    let item = await waitFor(findReplyItem, 1200);
+
+    // 2. Hover, then the message's menu button.
+    if (!item) {
+      for (const type of ["mouseover", "mouseenter", "mousemove"]) node.dispatchEvent(new MouseEvent(type, { ...at, button: 0 }));
+      const btn = await waitFor(() => waQ("messageMenuButton", node), 1200);
+      if (btn) { clickLikeAUser(btn.closest('[role="button"], button') || btn); item = await waitFor(findReplyItem, 1500); }
+    }
+    if (!item) {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      throw new Error("Couldn't open WhatsApp's Reply option on that message (menu selectors may need updating). Nothing was typed.");
+    }
+    clickLikeAUser(item);
+    if (!(await waitFor(quoted, 2500))) throw new Error("Clicked Reply but the quote didn't appear above the message box. Nothing was typed.");
+    return true;
+  }
+
+  // Removes a quote preview, if there is one.
+  async function cancelReply() {
+    const footer = document.querySelector("#main footer");
+    const scope = footer?.parentElement || footer;
+    const btn = scope && waQ("quoteCloseButton", scope);
+    if (btn && !btn.closest('[aria-label="Send"]')) clickLikeAUser(btn.closest('[role="button"], button') || btn);
   }
 
   // Messages render a moment after a chat opens; wait for them (an empty chat just times out).
@@ -338,6 +427,6 @@
 
   window.WAReader = {
     readChatList, findRow, currentChatName, findSearchBox, isChatOpen, headerNames, openChat, readMessages, searchFor, clearSearch,
-    typeInto, highlight, parseMeta, norm, pressSend, waitForMessages, inspectLayout,
+    typeInto, highlight, parseMeta, norm, pressSend, findMessage, attachReply, cancelReply, quotePreviewText, waitForMessages, inspectLayout,
   };
 })();

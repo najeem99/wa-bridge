@@ -22,6 +22,16 @@ window.WA_SELECTORS = {
   messageMeta: ["[data-pre-plain-text]"],
   messageText: ["span.selectable-text", ".copyable-text span[dir]"],
   composeBox: ['#main footer div[contenteditable="true"]'],
+  // Quoted replies. WhatsApp shows a per-message menu button on hover and a
+  // context menu on right-click; both contain a "Reply" item.
+  messageMenuButton: [
+    '[aria-label="Context menu"]', '[aria-label*="menu" i]', '[data-icon="down-context"]',
+    '[data-icon*="chevron-down"]', '[data-icon*="down"]',
+  ],
+  menuItem: ['[role="application"] li', '[role="menu"] [role="menuitem"]', '[role="menu"] li', 'li[role="button"]', '[role="menuitem"]'],
+  replyLabels: ["Reply", "رد", "الرد", "Responder", "Répondre", "Antworten", "Rispondi", "जवाब दें", "Balas", "Yanıtla"],
+  // The quote preview WhatsApp shows above the message box, and its close button.
+  quoteCloseButton: ['[aria-label="Cancel reply"]', '[aria-label*="cancel" i]', '[data-icon="x"]', '[data-icon*="close"]'],
   sendButton: [
     '#main footer button[aria-label="Send"]',
     '#main footer [data-icon="send"]',

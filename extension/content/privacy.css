@@ -144,3 +144,13 @@ html.wa-bridge-blur #main [data-id^="false_"]:hover {
   .wa-bridge-sugg-text { background: #1a1918; border-color: #34322f; }
   .wa-bridge-sugg-said, .wa-bridge-sugg-why { color: #9c9a93; }
 }
+
+/* "Replying to …" line in the send card, styled like WhatsApp's quote strip. */
+.wa-bridge-confirm-quote {
+  border-left: 3px solid #d97757; background: #f1eee6; color: #4a4843;
+  border-radius: 6px; padding: 6px 10px; margin: 0 0 8px; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+@media (prefers-color-scheme: dark) {
+  .wa-bridge-confirm-quote { background: #2f2d2b; color: #c9c6bf; }
+}

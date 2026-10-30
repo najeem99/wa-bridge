@@ -21,6 +21,19 @@ async function logActivity(entry) {
   await chrome.storage.local.set({ log: log.slice(-150) });
 }
 
+// Exactly what Claude asked for and what it was given, kept in this browser
+// only so the side panel can show it. Off when "Record what was shared" is off.
+const DETAIL_CAP = 20000;
+function capped(value) {
+  if (value === undefined) return undefined;
+  const json = JSON.stringify(value);
+  return json.length <= DETAIL_CAP ? value : { truncated: true, preview: json.slice(0, DETAIL_CAP) };
+}
+async function detailsFor(args, data) {
+  const { logDetails = true } = await chrome.storage.local.get("logDetails");
+  return logDetails ? { request: capped(args || {}), shared: capped(data) } : {};
+}
+
 // ---------- WebSocket to the local server ----------
 async function connect() {
   if (connecting || (ws && ws.readyState <= 1)) return;
@@ -46,6 +59,7 @@ async function connect() {
       keepAlive = setInterval(() => sock.readyState === 1 && sock.send('{"type":"ping"}'), 20000);
       return;
     }
+    if (msg.type === "pong") { pongWaiters.splice(0).forEach((f) => f(true)); return; }
     if (msg.type === "req") handleRequest(sock, msg);
   };
 
@@ -81,6 +95,34 @@ async function sendToTab(tab, msg) {
   }
 }
 
+// The side panel's refresh button: really test the link instead of trusting
+// the saved status. Ping the server; if it doesn't answer, reconnect.
+const pongWaiters = [];
+async function checkConnection() {
+  await chrome.storage.local.set({ statusCheckedAt: Date.now() });
+  if (ws && ws.readyState === 1 && !connecting) {
+    await setStatus("connecting", "Checking…");
+    const answered = await new Promise((resolve) => {
+      pongWaiters.push(resolve);
+      try { ws.send(JSON.stringify({ type: "ping", t: Date.now() })); } catch { resolve(false); }
+      setTimeout(() => resolve(false), 2500);
+    });
+    // Servers from before this version never answer pings; an open socket still counts.
+    if (answered || ws?.readyState === 1) {
+      await setStatus("connected", answered ? "Checked just now" : "Connected (restart Claude Desktop once to enable full checks)");
+      return { status: "connected", verified: answered };
+    }
+  }
+  try { ws?.close(); } catch {}
+  ws = null; connecting = false;
+  await setStatus("connecting", "Reconnecting…");
+  await connect();
+  await new Promise((r) => setTimeout(r, 2500));
+  const { status } = await chrome.storage.local.get("status");
+  if (status?.status === "connecting") await setStatus("disconnected", "No answer from WA Bridge. Is Claude Desktop running?");
+  return (await chrome.storage.local.get("status")).status;
+}
+
 async function findWhatsAppTab() {
   const tabs = await chrome.tabs.query({ url: "https://web.whatsapp.com/*" });
   return tabs[0] || null;
@@ -89,15 +131,14 @@ async function findWhatsAppTab() {
 async function handleRequest(sock, { id, tool, args }) {
   const reply = (body) => sock.readyState === 1 && sock.send(JSON.stringify({ type: "res", id, ...body }));
   const started = Date.now();
-  await logActivity({ phase: "start", id, tool, args: summarizeArgs(tool, args) });
 
   if (LOCAL_TOOLS[tool]) {
     try {
       const data = await LOCAL_TOOLS[tool](args || {});
-      await logActivity({ phase: "done", id, tool, ms: Date.now() - started, result: summarizeResult(tool, data) });
+      await logActivity({ phase: "done", id, tool, ms: Date.now() - started, result: summarizeResult(tool, data), ...(await detailsFor(args, data)) });
       return reply({ ok: true, data });
     } catch (e) {
-      await logActivity({ phase: "error", id, tool, error: e.message });
+      await logActivity({ phase: "error", id, tool, error: e.message, ...(await detailsFor(args)) });
       return reply({ ok: false, error: e.message });
     }
   }
@@ -117,10 +158,11 @@ async function handleRequest(sock, { id, tool, args }) {
       ms: Date.now() - started,
       error: res.ok ? undefined : res.error,
       result: res.ok ? summarizeResult(tool, res.data) : undefined,
+      ...(await detailsFor(args, res.ok ? res.data : undefined)),
     });
     reply(res.ok ? { ok: true, data: res.data } : { ok: false, error: res.error });
   } catch (e) {
-    await logActivity({ phase: "error", id, tool, error: e.message });
+    await logActivity({ phase: "error", id, tool, error: e.message, ...(await detailsFor(args)) });
     reply({ ok: false, error: e.message });
   }
 }
@@ -139,6 +181,7 @@ function summarizeResult(tool, d = {}) {
     case "draft_reply": return `draft typed in "${d.chat}" (not sent)`;
     case "get_pending_replies": return d.auto_reply_on ? `${d.pending?.length ?? 0} ${(d.pending?.length ?? 0) === 1 ? "chat" : "chats"} waiting for a reply` : "auto-reply is off";
     case "suggest_reply": return `suggested a reply for "${d.chat}" (waiting for you)`;
+    case "inspect_layout": return "page structure only (no messages or names)";
     case "send_message": return {
       sent: `sent to "${d.chat}" ${/automatically/.test(d.how || "") ? "after the countdown" : "after you clicked Send"}${d.edited_by_user ? " (you edited it)" : ""}`,
       cancelled: `you cancelled a message to "${d.chat}"`,
@@ -347,6 +390,7 @@ chrome.notifications.onButtonClicked.addListener((notifId, index) => {
 // ---------- wiring ----------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.kind === "incoming") onIncoming(msg);
+  if (msg.kind === "checkConnection") { checkConnection().then(sendResponse); return true; }
   if (msg.kind === "suggestionDecision") {
     decide(msg.id, msg.decision, msg.text).then(sendResponse);
     return true;
@@ -375,4 +419,6 @@ chrome.alarms.create("wa-bridge-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => a.name === "wa-bridge-reconnect" && connect());
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
-connect();
+// A fresh start means nothing is connected yet, whatever was saved last time.
+// (Otherwise a green dot from an old session could stay green.)
+setStatus("connecting", "Checking…").then(connect);

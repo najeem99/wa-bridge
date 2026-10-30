@@ -24,7 +24,11 @@ const store = {
   suggestions: [{ id: "s1", chat: "Ahmed (Team Lead)", at: now, status: "pending", incoming: ["Where's the office again?"], reply: "Example Tower, 5th floor 👍", reason: "From your note" }],
   log: [
     { phase: "done", tool: "list_chats", result: "4 chats", at: now - 240000 },
-    { phase: "done", tool: "get_messages", result: "5 messages from \"Family\"", at: now - 200000 },
+    { phase: "done", tool: "get_messages", result: "2 messages from \"Family\"", at: now - 200000,
+      request: { chat: "Family", limit: 2 },
+      shared: { chat: "Family", messages: [
+        { ref: "m1a2b3", from: "Mum", direction: "in", time: "21:30", date: "30/10/2026", text: "Are you coming home tonight?" },
+        { ref: "m4c5d6", from: "me", direction: "out", time: "21:32", date: "30/10/2026", text: "Yes, leaving office at 7" } ] } },
     { phase: "done", tool: "get_pending_replies", result: "1 chat waiting for a reply", at: now - 90000 },
     { phase: "done", tool: "suggest_reply", result: "suggested a reply for \"Ahmed (Team Lead)\" (waiting for you)", at: now - 85000 },
     { phase: "done", tool: "send_message", result: "sent to \"Family\" after the countdown", at: now - 30000 },
@@ -146,6 +150,14 @@ const page = `<!doctype html><html><head><meta charset="utf-8"><style>
   const h = await sp.evaluate(() => document.documentElement.scrollHeight);
   await sp.setViewportSize({ width: 380, height: h });
   await sp.screenshot({ path: path.join(OUT, "side-panel.png") });
+  if (process.env.EXPAND_LOG) {
+    await sp.evaluate(() => document.querySelectorAll("#log details").forEach((d, i) => { if (i === 0) d.open = true; }));
+    await sp.evaluate(() => { const d = document.getElementById("dot"); d.className = "dot connecting"; });
+    await sp.waitForTimeout(200);
+    const h2 = await sp.evaluate(() => document.documentElement.scrollHeight);
+    await sp.setViewportSize({ width: 380, height: h2 });
+    await sp.screenshot({ path: process.env.EXPAND_LOG });
+  }
 
   await browser.close();
   console.log("done");

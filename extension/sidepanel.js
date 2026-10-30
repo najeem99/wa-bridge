@@ -8,7 +8,7 @@ const STATUS_TEXT = {
 };
 
 async function render() {
-  const s = await chrome.storage.local.get(["status", "token", "blur", "notifyMode", "allowlist", "allowAll", "allowSend", "sendMode", "log"]);
+  const s = await chrome.storage.local.get(["status", "token", "logDetails", "blur", "notifyMode", "allowlist", "allowAll", "allowSend", "sendMode", "log"]);
   $("allowSend").checked = s.allowSend !== false;
   $("sendMode").value = s.sendMode === "confirm" ? "confirm" : "countdown";
   $("sendMode").disabled = s.allowSend === false;
@@ -17,6 +17,8 @@ async function render() {
   $("dot").className = "dot " + st;
   $("statusText").textContent = STATUS_TEXT[st] || st;
   $("statusText").title = s.status?.detail || "";
+  $("statusDetail").textContent = s.status?.detail || "";
+  $("logDetails").checked = s.logDetails !== false;
   $("pairing").hidden = st === "connected" && !!s.token;
 
   $("blur").checked = !!s.blur;
@@ -56,9 +58,90 @@ async function render() {
     detail.className = e.phase === "error" ? "err" : "res";
     detail.textContent = e.phase === "error" ? e.error : e.result;
     li.append(t, tool, detail);
+    const more = sharedDetails(e);
+    if (more) li.appendChild(more);
     log.appendChild(li);
   }
 }
+
+// ---------- "what was shared" details for a log entry ----------
+const openEntries = new Set(); // keeps expanded entries open across re-renders
+const mk = (tag, cls, text) => { const x = document.createElement(tag); if (cls) x.className = cls; if (text != null) x.textContent = text; return x; };
+function section(title, items) {
+  if (!items.length) return null;
+  const box = mk("div");
+  box.append(mk("h4", null, title));
+  const ul = mk("ul");
+  for (const it of items) ul.appendChild(it);
+  box.appendChild(ul);
+  return box;
+}
+function msgItem(m) {
+  const li = mk("li", "msg");
+  li.append(mk("span", "who", (m.from || m.chat || "") + " "), mk("span", "when", [m.time, m.date].filter(Boolean).join(", ")));
+  li.append(mk("div", null, m.text ?? m.preview ?? ""));
+  return li;
+}
+function sharedDetails(e) {
+  if (!e.request && !e.shared) return null;
+  const d = e.shared || {};
+  const req = e.request || {};
+  const parts = [];
+
+  // What Claude asked for (including any text it wanted to send).
+  const asked = Object.entries(req).filter(([, v]) => v !== undefined && v !== "")
+    .map(([k, v]) => mk("li", null, `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`));
+  parts.push(section("Claude asked", asked));
+
+  if (d.truncated) { parts.push(section("Shared (too long to show in full)", [mk("li", null, d.preview.slice(0, 2000) + "…")])); }
+  else {
+    // Contacts / chat names
+    const names = [
+      ...(d.chats || []).map((c) => c.name + (c.unread ? ` (${c.unread} unread)` : "") + (c.preview ? ` · “${c.preview}”` : "")),
+      ...(d.results || []).map((c) => c.name),
+      ...(d.pending || []).map((p) => p.chat),
+    ];
+    if (d.chat && !names.length) names.push(d.chat);
+    parts.push(section(`Contacts / chats shared (${names.length})`, names.map((n) => mk("li", null, n))));
+
+    // Messages
+    const msgs = [
+      ...(d.messages || []),
+      ...(d.events || []).map((ev) => ({ chat: ev.chat, time: ev.time, preview: ev.preview })),
+      ...(d.pending || []).flatMap((p) => (p.recent_conversation?.length ? p.recent_conversation : (p.new_messages || []).map((t) => ({ from: p.chat, text: t })))),
+    ];
+    if (d.replying_to) msgs.push({ from: "Replying to " + d.replying_to.from, time: d.replying_to.time, text: d.replying_to.text });
+    if (d.text && e.tool === "send_message") msgs.push({ from: "Sent by Claude", text: d.text });
+    parts.push(section(`Messages shared (${msgs.length})`, msgs.map(msgItem)));
+
+    if (d.user_note) parts.push(section("Your auto-reply note", [mk("li", "msg", d.user_note)]));
+    if (d.other_chats_with_activity) parts.push(section("Hidden", [mk("li", null, `${d.other_chats_with_activity} other chats had activity (not named)`)]));
+  }
+  const raw = mk("details");
+  raw.append(mk("summary", null, "Raw data"), mk("pre", null, JSON.stringify({ request: req, shared: e.shared }, null, 2)));
+  parts.push(raw);
+
+  const key = `${e.at}-${e.tool}`;
+  const wrap = mk("details");
+  wrap.open = openEntries.has(key);
+  wrap.addEventListener("toggle", () => { wrap.open ? openEntries.add(key) : openEntries.delete(key); });
+  wrap.append(mk("summary", null, "Show what Claude received"));
+  const inner = mk("div", "shared");
+  for (const p of parts) if (p) inner.appendChild(p);
+  wrap.appendChild(inner);
+  return wrap;
+}
+
+$("logDetails").onchange = (e) => chrome.storage.local.set({ logDetails: e.target.checked });
+$("refreshBtn").onclick = async () => {
+  const b = $("refreshBtn");
+  b.classList.add("spin"); b.disabled = true;
+  $("dot").className = "dot connecting";
+  $("statusText").textContent = "Checking…";
+  try { await chrome.runtime.sendMessage({ kind: "checkConnection" }); } catch {}
+  b.classList.remove("spin"); b.disabled = false;
+  render();
+};
 
 async function loadSuggestions() {
   const [tab] = await chrome.tabs.query({ url: "https://web.whatsapp.com/*" });

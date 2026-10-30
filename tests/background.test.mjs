@@ -42,12 +42,14 @@ globalThis.chrome = {
 
 // ---- fake local server connection ----
 let sock;
+let serverAnswersPings = true;
 const replies = new Map();
 globalThis.WebSocket = class {
   constructor() { this.readyState = 0; sock = this; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 5); }
   send(data) {
     const m = JSON.parse(data);
     if (m.type === "hello") setTimeout(() => this.onmessage?.({ data: JSON.stringify({ type: "ready" }) }), 5);
+    if (m.type === "ping" && serverAnswersPings) setTimeout(() => this.onmessage?.({ data: JSON.stringify({ type: "pong", t: m.t }) }), 5);
     if (m.type === "res") replies.get(m.id)?.(m);
   }
   close() { this.readyState = 3; }
@@ -149,6 +151,34 @@ assert(!r.ok && /switched off/.test(r.error), "off: suggest_reply refused");
 // 9. The activity log records Claude's checks.
 assert(store.log.some((e) => e.tool === "get_pending_replies" && /waiting/.test(e.result)) && store.log.some((e) => e.tool === "suggest_reply"), "checks and suggestions appear in the side panel log");
 assert(networkCalls === 0, "still zero API/network calls");
+
+// 10. The log records exactly what Claude asked for and received.
+await chrome.storage.local.set({ autoReply: true, log: [] });
+await send({ kind: "incoming", chat: "Sam 🙂", incoming: ["Office address?"], context: [{ from: "Sam 🙂", direction: "in", text: "Office address?", time: "07:00" }] });
+await sleep(30);
+r = await callTool("get_pending_replies");
+let entry = store.log.at(-1);
+assert(entry.tool === "get_pending_replies" && entry.shared?.pending?.[0]?.chat === "Sam 🙂" && entry.shared.pending[0].recent_conversation[0].text === "Office address?", "log entry holds the contacts and messages Claude received");
+r = await callTool("suggest_reply", { chat: "Sam 🙂", text: "Example Tower" });
+entry = store.log.at(-1);
+assert(entry.request?.text === "Example Tower" && entry.request.chat === "Sam 🙂", "log entry holds what Claude asked to do, including the text");
+await chrome.storage.local.set({ logDetails: false });
+await callTool("get_pending_replies");
+entry = store.log.at(-1);
+assert(!("shared" in entry) && !("request" in entry) && entry.result, "recording switched off: only the summary is kept");
+
+// 11. Connection refresh: really checks instead of trusting the saved status.
+let chk = await send({ kind: "checkConnection" });
+await sleep(2700);
+assert(store.status.status === "connected" && /Checked just now/.test(store.status.detail), "refresh with a live server: verified by ping/pong");
+sock.close(); sock.onclose?.({ code: 1006 });
+await chrome.storage.local.set({ status: { status: "connected", detail: "stale" } }); // stale green dot
+serverAnswersPings = true;
+const realWS = globalThis.WebSocket;
+globalThis.WebSocket = class { constructor() { this.readyState = 0; setTimeout(() => { this.readyState = 3; this.onclose?.({ code: 1006 }); }, 5); } send() {} close() {} };
+await new Promise((res) => { for (const f of listeners.runtime) f({ kind: "checkConnection" }, {}, res); });
+assert(store.status.status === "disconnected" && /Claude Desktop/.test(store.status.detail), "refresh with no server: stale green turns red with a reason");
+globalThis.WebSocket = realWS;
 
 console.log("ALL BACKGROUND TESTS PASSED");
 process.exit(0);
