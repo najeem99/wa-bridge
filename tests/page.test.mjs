@@ -394,6 +394,23 @@ assert(ar.ok && reallySent.length === sentCount + 1 && cbox().textContent === "J
 cbox().textContent = "";
 await window.chrome.storage.local.set({ autoReply: false });
 
+// 22. Newer WhatsApp: the search box is an <input> outside #side, labelled "Search".
+const oldSearch = doc.getElementById("search");
+oldSearch.remove();
+doc.body.insertAdjacentHTML("afterbegin", '<div id="new-side-header"><input type="text" id="newsearch" aria-label="Search or start a new chat"></div>');
+const newSearch = doc.getElementById("newsearch");
+assert(window.WAReader.findSearchBox() === newSearch, "finds the newer search <input> by its label, outside #side");
+r = await call("find_contact", { query: "Bo" });
+assert(r.ok && r.data.results.length >= 1 && newSearch.value === "", "find_contact works with the new search box and clears it");
+newSearch.removeAttribute("aria-label");
+assert(window.WAReader.findSearchBox() === newSearch, "unlabelled search field still found as the left-hand text field");
+r = await call("inspect_layout");
+assert(r.ok && r.data.search.found && r.data.search.chosen.tag === "input", "inspect_layout reports the search box");
+newSearch.remove();
+r = await call("find_contact", { query: "Bo" });
+assert(!r.ok && /inspect_layout/.test(r.error), "no search box: clear error pointing to inspect_layout");
+doc.getElementById("side").prepend(oldSearch);
+
 // 13. Switch off sending in the side panel.
 await window.chrome.storage.local.set({ allowSend: false });
 r = await call("send_message", { chat: "Family", text: "blocked" });

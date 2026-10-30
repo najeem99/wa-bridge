@@ -111,20 +111,66 @@
     });
   }
 
+  // WhatsApp's search box changes between versions (an <input> or an editable
+  // <div>, inside #side or not). Try the known selectors, then fall back to the
+  // first visible text field in the left part of the window that isn't the
+  // chat's message box.
+  // Has a size on screen. (Where layout isn't computed at all, e.g. in tests, everything counts as visible.)
+  function isVisible(el) {
+    if (!document.documentElement.getBoundingClientRect().width) return true;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 || r.height > 0;
+  }
+  function findSearchBox() {
+    for (const sel of window.WA_SELECTORS.searchBox) {
+      let list = [];
+      try { list = [...document.querySelectorAll(sel)]; } catch { continue; }
+      const hit = list.find((el) => !el.closest("#main") && isVisible(el));
+      if (hit) return hit;
+    }
+    const fields = [...document.querySelectorAll('input[type="text"], input:not([type]), input[type="search"], [contenteditable="true"]')]
+      .filter((el) => !el.closest("#main") && !el.closest("footer") && isVisible(el));
+    const left = fields.filter((el) => {
+      const r = el.getBoundingClientRect?.();
+      return !r || !r.width || r.left < window.innerWidth * 0.45;
+    });
+    return left[0] || null;
+  }
+
+  const isInput = (el) => el && el.tagName === "INPUT";
+
   async function clearSearch() {
-    const box = waQ("searchBox");
+    const box = findSearchBox();
     if (!box) return;
     box.focus();
-    document.execCommand("selectAll");
-    document.execCommand("delete");
+    if (isInput(box)) {
+      box.select();
+      if (!document.execCommand("delete") || box.value) {
+        box.value = "";
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    } else {
+      document.execCommand("selectAll");
+      document.execCommand("delete");
+    }
     box.blur();
   }
 
   async function searchFor(query) {
-    const box = waQ("searchBox");
-    if (!box) throw new Error("Could not find WhatsApp's search box (selectors may need updating).");
+    const box = findSearchBox();
+    if (!box) throw new Error("Could not find WhatsApp's search box. Run inspect_layout and share its 'search' section so the selectors can be updated.");
     await clearSearch();
-    await typeInto(box, query);
+    box.focus();
+    if (isInput(box)) {
+      if (!document.execCommand("insertText", false, query) || box.value !== query) {
+        // Fallback for inputs that ignore execCommand: set the value the way React expects.
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        setter.call(box, query);
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    } else {
+      await typeInto(box, query);
+    }
     await sleep(900); // let WhatsApp filter the list
   }
 
@@ -244,6 +290,23 @@
         "compose box": count('footer [contenteditable="true"]', main),
       } : null,
       messages_found_by_reader: nodes.length,
+      search: (() => {
+        const box = findSearchBox();
+        const fields = [...document.querySelectorAll('input, [contenteditable="true"]')].filter((el) => !el.closest("#main"));
+        const describe = (el) => {
+          const r = el.getBoundingClientRect?.() || {};
+          return {
+            tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || undefined,
+            role: el.getAttribute("role") || undefined,
+            aria_label: el.getAttribute("aria-label") || undefined,       // WhatsApp's own UI text
+            placeholder: el.getAttribute("placeholder") || undefined,     // WhatsApp's own UI text
+            contenteditable: el.getAttribute("contenteditable") || undefined,
+            in_side: !!el.closest("#side"), in_footer: !!el.closest("footer"),
+            x: Math.round(r.left || 0), w: Math.round(r.width || 0),
+          };
+        };
+        return { found: !!box, chosen: box ? describe(box) : null, candidates: fields.slice(0, 8).map(describe) };
+      })(),
       last_message_skeleton: skeleton(nodes[nodes.length - 1] || main?.querySelector('[role="row"]:last-of-type')),
     };
   }
@@ -274,7 +337,7 @@
   }
 
   window.WAReader = {
-    readChatList, findRow, currentChatName, isChatOpen, headerNames, openChat, readMessages, searchFor, clearSearch,
+    readChatList, findRow, currentChatName, findSearchBox, isChatOpen, headerNames, openChat, readMessages, searchFor, clearSearch,
     typeInto, highlight, parseMeta, norm, pressSend, waitForMessages, inspectLayout,
   };
 })();

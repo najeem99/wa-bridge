@@ -6,7 +6,16 @@ window.WA_SELECTORS = {
   chatRow: ['#pane-side [role="listitem"]', '#pane-side [role="row"]'],
   rowTitle: ['span[dir="auto"][title]', "span[title]"],
   rowUnread: ['span[aria-label*="unread message"]', 'span[aria-label*="unread"]'],
-  searchBox: ['#side div[contenteditable="true"]', '#side input[type="text"]'],
+  // Most specific first. reader.findSearchBox() adds a position-based fallback.
+  searchBox: [
+    'input[aria-label*="Search" i]:not(#main *)',
+    '[contenteditable="true"][aria-label*="Search" i]:not(#main *)',
+    'input[placeholder*="Search" i]:not(#main *)',
+    '[role="textbox"][aria-label*="Search" i]:not(#main *)',
+    '#side div[contenteditable="true"]',
+    '#side input[type="text"]',
+    '#side input:not([type])',
+  ],
   main: ["#main"],
   mainTitle: ['#main header span[dir="auto"]', "#main header span[title]"],
   message: ["#main div.message-in, #main div.message-out"],
