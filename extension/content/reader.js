@@ -213,21 +213,43 @@
   //  2. elements carrying data-pre-plain-text (sender + time header of text messages)
   //  3. the old .message-in / .message-out classes
   const MSG_ID_RE = /^(true|false)_/;
+  const outermost = (list) => list.filter((el) => !list.some((o) => o !== el && o.contains(el)));
   function messageNodes() {
     const main = document.querySelector("#main");
     if (!main) return [];
-    let nodes = [...main.querySelectorAll("[data-id]")].filter((el) => MSG_ID_RE.test(el.getAttribute("data-id") || ""));
-    nodes = nodes.filter((el) => !nodes.some((o) => o !== el && o.contains(el))); // outermost only
+    // Newest layout: every message (text, voice, media) is a [data-testid="conv-msg-…"] block.
+    let nodes = outermost([...main.querySelectorAll('[data-testid^="conv-msg-"]')]);
+    if (nodes.length) return nodes;
+    nodes = outermost([...main.querySelectorAll("[data-id]")].filter((el) => MSG_ID_RE.test(el.getAttribute("data-id") || "")));
     if (nodes.length) return nodes;
     const metas = [...main.querySelectorAll("[data-pre-plain-text]")];
     if (metas.length) return metas.map((m) => m.closest(".message-in, .message-out, [role='row']") || m);
     return waQAll("message");
   }
 
+  // Sent-or-received, from the strongest signal available:
+  //  1. data-id "true_…" / "false_…"   2. .message-out / .message-in
+  //  3. delivery ticks (only your own messages have them)   4. bubble on the right half of the chat
+  const TICK_RE = /^(msg-(check|dblcheck|time)|status-(check|dblcheck|time))|dblcheck|-check$/;
   function isOutgoing(node) {
     const id = node.getAttribute("data-id") || node.querySelector("[data-id]")?.getAttribute("data-id") || "";
     if (MSG_ID_RE.test(id)) return id.startsWith("true_");
-    return node.classList.contains("message-out") || !!node.querySelector(".message-out") || !!node.closest(".message-out");
+    if (node.classList.contains("message-out") || node.querySelector(".message-out") || node.closest(".message-out")) return true;
+    if (node.classList.contains("message-in") || node.querySelector(".message-in") || node.closest(".message-in")) return false;
+    if ([...node.querySelectorAll("[data-icon]")].some((i) => TICK_RE.test(i.getAttribute("data-icon") || ""))) return true;
+    const main = document.querySelector("#main");
+    const bubble = node.querySelector('[data-testid="msg-container"]') || node;
+    const b = bubble.getBoundingClientRect?.(), m = main?.getBoundingClientRect?.();
+    if (b && m && b.width && m.width) return b.left + b.width / 2 > m.left + m.width / 2;
+    return false;
+  }
+
+  // For messages with no sender/time header (voice notes, media): the clock time shown on the bubble.
+  const CLOCK_RE = /^\d{1,2}[:.]\d{2}(\s?[ap]\.?m\.?)?$/i;
+  function bubbleTimes(node) {
+    return [...node.querySelectorAll("span, div")]
+      .filter((el) => el.children.length === 0 && CLOCK_RE.test(norm(el.textContent)))
+      .map((el) => norm(el.textContent));
   }
 
   function messageText(node, metaEl) {
@@ -246,10 +268,12 @@
       const metaEl = node.matches?.("[data-pre-plain-text]") ? node : waQ("messageMeta", node);
       const meta = parseMeta(metaEl && metaEl.getAttribute("data-pre-plain-text"));
       const voice = !!voicePlayButton(node);
+      const times = metaEl ? [] : bubbleTimes(node);
       const duration = voice ? voiceDuration(node) : null;
+      if (!meta.time && times.length) meta.time = times[times.length - 1];
       const text = messageText(node, metaEl) || (voice ? `[voice message${duration ? " " + duration : ""}]` : "[media or non-text message]");
-      const rawId = node.getAttribute("data-id") || node.querySelector("[data-id]")?.getAttribute("data-id") || "";
-      const id = MSG_ID_RE.test(rawId) ? rawId : `${meta.date}|${meta.time}|${out ? "out" : "in"}|${text.slice(0, 80)}`;
+      const rawId = node.getAttribute("data-testid")?.replace(/^conv-msg-/, "") || node.getAttribute("data-id") || node.querySelector("[data-id]")?.getAttribute("data-id") || "";
+      const id = rawId || `${meta.date}|${meta.time}|${out ? "out" : "in"}|${text.slice(0, 80)}`;
       return { id, ref: refFor(id), from: out ? "me" : meta.sender || "them", direction: out ? "out" : "in", time: meta.time, date: meta.date, text, ...(voice ? { voice: true, duration } : {}), node };
     });
   }
@@ -263,10 +287,9 @@
     return null;
   }
   function voiceDuration(node) {
-    for (const el of node.querySelectorAll("div, span")) {
-      if (el.children.length === 0 && /^\d{1,2}:\d{2}$/.test(norm(el.textContent))) return norm(el.textContent);
-    }
-    return null;
+    const t = bubbleTimes(node);
+    // A voice bubble shows its length (0:12) before the clock time (07:30); with only one, it's the length.
+    return t.length ? t[0] : null;
   }
 
   // Gets a voice note's decrypted audio. WhatsApp only decrypts it on play, so
@@ -431,6 +454,18 @@
         "compose box": count('footer [contenteditable="true"]', main),
       } : null,
       messages_found_by_reader: nodes.length,
+      reader_summary: (() => {
+        const msgs = readMessages(300);
+        return { sent_by_you: msgs.filter((x) => x.direction === "out").length, received: msgs.filter((x) => x.direction === "in").length,
+          voice_notes: msgs.filter((x) => x.voice).length, without_text: msgs.filter((x) => /^\[/.test(x.text)).length };
+      })(),
+      // Shapes only: letters and digits masked, so no ids or numbers are shown.
+      message_id_shapes: [...new Set(nodes.slice(-6).map((n) => {
+        const id = n.getAttribute("data-id") || n.querySelector("[data-id]")?.getAttribute("data-id") || "";
+        return id.replace(/[A-Za-z0-9]+/g, (w) => (w === "true" || w === "false" ? w : "x")) || "(none)";
+      }))],
+      icons_in_recent_messages: [...new Set(nodes.slice(-8).flatMap((n) => [...n.querySelectorAll("[data-icon]")].map((i) => i.getAttribute("data-icon"))))].slice(0, 30),
+      play_buttons_found: nodes.filter((n) => voicePlayButton(n)).length,
       search: (() => {
         const box = findSearchBox();
         const fields = [...document.querySelectorAll('input, [contenteditable="true"]')].filter((el) => !el.closest("#main"));

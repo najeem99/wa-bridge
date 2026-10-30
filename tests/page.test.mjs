@@ -23,6 +23,7 @@ const html = `<html><body>
       ${row("Boss", "Release tomorrow", "Yesterday", 0)}
       ${row("Secret", "private stuff", "19:02", 1)}
       ${row("Sam 🙂", "Reached home?", "22:01", 0)}
+      ${row("Layout C", "Voice message", "07:40", 0)}
     </div></div>
   <div id="main"></div>
 </body></html>`;
@@ -41,6 +42,20 @@ doc.getElementById("pane-side").addEventListener("mousedown", (e) => {
   // Like WhatsApp: the clicked chat becomes the selected one in the sidebar.
   doc.querySelectorAll("#pane-side [aria-selected]").forEach((x) => x.removeAttribute("aria-selected"));
   rowEl.firstElementChild.setAttribute("aria-selected", "true");
+  if (name === "Layout C") {
+    // Newest WhatsApp (seen live on 30 Oct 2026): data-testid="conv-msg-…", plain data-id,
+    // direction only visible from delivery ticks, voice notes without a text header.
+    const conv = (id, inner) => `<div role="row" tabindex="-1"><div tabindex="-1" data-id="3EB0${id}" data-testid="conv-msg-3EB0${id}"><div><div><div><span></span><div data-testid="msg-container">${inner}</div><div data-testid="addon-bubble-container"></div></div></div></div></div></div>`;
+    doc.getElementById("main").innerHTML =
+      `<header><span dir="auto" title="Layout C">Layout C</span></header>` +
+      `<div role="row"><span>TODAY</span></div>` +
+      conv("A1", `<div data-pre-plain-text="[07:30, 30/10/2026] Lina: "><span class="selectable-text"><span>Can you call me?</span></span></div><span>07:30</span>`) +
+      conv("A2", `<div data-pre-plain-text="[07:31, 30/10/2026] Me: "><span class="selectable-text"><span>In a meeting, 10 min</span></span></div><span>07:31</span><span data-icon="msg-dblcheck"></span>`) +
+      conv("A3", `<button aria-label="Play voice message"><span data-icon="audio-play"></span></button><div>0:12</div><div>07:40</div>`) +
+      conv("A4", `<button aria-label="Play voice message"><span data-icon="audio-play"></span></button><div>0:05</div><div>07:41</div><span data-icon="msg-check"></span>`) +
+      `<footer><div contenteditable="true"></div><button aria-label="Send"><span data-icon="send"></span></button></footer>`;
+    return;
+  }
   if (name === "Sam 🙂") {
     // Newer WhatsApp layout: no message-in/out classes, message IDs in data-id,
     // and messages appear a moment after the chat opens.
@@ -157,7 +172,7 @@ doc.execCommand = (cmd, _ui, val) => {
 // Fake chrome APIs.
 const msgListeners = [];
 const onMsg = (msg, sender, res) => { let async = false; for (const f of msgListeners) if (f(msg, sender, res) === true) async = true; return async; };
-const store = { allowlist: ["Family", "Boss", "Sam 🙂"], allowAll: false, blur: false, sendMode: "confirm" };
+const store = { allowlist: ["Family", "Boss", "Sam 🙂", "Layout C"], allowAll: false, blur: false, sendMode: "confirm" };
 const sent = [];
 const storeListeners = [];
 window.chrome = {
@@ -188,7 +203,7 @@ await new Promise((r) => setTimeout(r, 1300)); // let main.js find the sidebar
 const call = (tool, args = {}) => new Promise((res) => onMsg({ kind: "tool", tool, args }, null, res));
 
 let r = await call("list_chats");
-assert(r.ok && r.data.chats.length === 4, "list_chats returns 4 chats");
+assert(r.ok && r.data.chats.length === 5, "list_chats returns 5 chats");
 const fam = r.data.chats.find((c) => c.name === "Family");
 const sec = r.data.chats.find((c) => c.name === "Secret");
 assert(fam.unread === 2 && fam.time === "20:41" && fam.preview === "Dinner at 8?", "Family: unread, time, preview parsed");
@@ -234,7 +249,7 @@ const notes = sent.filter((m) => m.kind === "notify");
 assert(notes.length === 2 && notes.find((n) => n.chat === "Secret").preview === null, "notifications raised; hidden chat preview withheld");
 
 r = await call("find_contact", { query: "Bo" });
-assert(r.ok && r.data.results.length === 4 && doc.getElementById("search").textContent === "", "find_contact searches then clears the box");
+assert(r.ok && r.data.results.length === 5 && doc.getElementById("search").textContent === "", "find_contact searches then clears the box");
 
 // ---------- send_message ----------
 const cbox = () => doc.querySelector("#main footer [contenteditable]");
@@ -450,6 +465,23 @@ await window.chrome.storage.local.set({ allowVoice: false });
 r = await call("get_voice_audio", { chat: "Sam 🙂" });
 assert(!r.ok && /turned off/.test(r.error), "voice transcription can be switched off");
 await window.chrome.storage.local.set({ allowVoice: true });
+
+// ---------- newest layout (conv-msg blocks, ticks, voice without header) ----------
+r = await call("get_messages", { chat: "Layout C", limit: 10 });
+const C = r.data.messages;
+assert(r.ok && C.length === 4, "conv-msg layout: all 4 messages found, date separator ignored (" + C.length + ")");
+assert(C[0].direction === "in" && C[0].from === "Lina" && C[0].text === "Can you call me?", "received text message read");
+assert(C[1].direction === "out" && C[1].from === "me" && C[1].text === "In a meeting, 10 min", "your own message recognised by its delivery ticks");
+assert(C[2].voice && C[2].direction === "in" && C[2].duration === "0:12" && C[2].time === "07:40" && C[2].text === "[voice message 0:12]", "received voice note found, with length and time kept apart");
+assert(C[3].voice && C[3].direction === "out" && C[3].duration === "0:05", "your own voice note found and marked as sent");
+assert(new Set(C.map((m) => m.ref)).size === 4 && !JSON.stringify(r.data).includes("3EB0"), "refs unique; raw ids not exposed");
+r = await call("inspect_layout");
+assert(r.data.reader_summary.sent_by_you === 2 && r.data.reader_summary.received === 2 && r.data.reader_summary.voice_notes === 2 && r.data.play_buttons_found === 2, "inspect_layout reports sent/received/voice counts");
+assert(r.data.message_id_shapes.every((x) => !/3EB0|A1/.test(x)) && r.data.icons_in_recent_messages.includes("msg-dblcheck"), "inspect_layout shows id shapes and icons, no ids");
+r = await call("get_voice_audio", { chat: "Layout C" });
+assert(r.ok && r.data.duration === "0:05" && r.data.from === "me", "latest voice note in the new layout is grabbed");
+await call("get_messages", { chat: "Sam 🙂", limit: 1 }); // back to the chat the next section uses
+await sleep(700);
 
 // ---------- auto-reply (content side) ----------
 const humanType = (el, v) => { el.value = v; };
